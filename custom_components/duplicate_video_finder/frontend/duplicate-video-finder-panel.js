@@ -6,15 +6,35 @@ customElements.define(
       this.attachShadow({ mode: "open" });
       this._hass = null;
       this._config = {};
-      this._duplicates = null;
-      this._isScanning = false;
-      this._isPaused = false;
-      this._progress = 0;
-      this._currentFile = "";
       this._updateTimer = null;
       this._eventListenersAttached = false;
-      this._version = "1.1.1"; // Version number
-      this._stateInitialized = false;
+      this._version = "1.1.2"; // Version number
+      
+      // Initialize from static state
+      this._initializeFromStaticState();
+    }
+
+    _initializeFromStaticState() {
+      // Initialize with default values if static state is empty
+      if (!DuplicateVideoFinderPanel._state.lastUpdateTime) {
+        DuplicateVideoFinderPanel._state = {
+          isScanning: false,
+          isPaused: false,
+          progress: 0,
+          currentFile: "",
+          duplicates: null,
+          stateInitialized: false,
+          lastUpdateTime: Date.now()
+        };
+      }
+      
+      // Copy static state to instance
+      this._isScanning = DuplicateVideoFinderPanel._state.isScanning;
+      this._isPaused = DuplicateVideoFinderPanel._state.isPaused;
+      this._progress = DuplicateVideoFinderPanel._state.progress;
+      this._currentFile = DuplicateVideoFinderPanel._state.currentFile;
+      this._duplicates = DuplicateVideoFinderPanel._state.duplicates;
+      this._stateInitialized = DuplicateVideoFinderPanel._state.stateInitialized;
     }
 
     set hass(hass) {
@@ -35,23 +55,38 @@ customElements.define(
     }
     
     _updateStateFromHass(hass) {
-      // Always check scan state to ensure we have the latest state
-      if (hass.data?.duplicate_video_finder?.scan_state) {
-        const scanState = hass.data.duplicate_video_finder.scan_state;
-        this._isScanning = scanState.is_scanning;
-        this._isPaused = scanState.is_paused;
-        this._progress = scanState.processed_files * 100;
-        this._currentFile = scanState.current_file;
-        
-        // If we have results and scan is complete, update duplicates
-        if (scanState.found_duplicates && Object.keys(scanState.found_duplicates).length > 0) {
-          this._duplicates = scanState.found_duplicates;
-        }
+      if (!hass?.states?.['duplicate_video_finder.scan_state']) {
+        return;
+      }
+
+      const scanState = hass.states['duplicate_video_finder.scan_state'].state;
+      const attributes = hass.states['duplicate_video_finder.scan_state'].attributes || {};
+      
+      // Update local state based on the entity state
+      this._isScanning = scanState === 'scanning';
+      this._isPaused = scanState === 'paused';
+      this._progress = attributes.progress || 0;
+      this._currentFile = attributes.current_file || '';
+      
+      // Update duplicates if available
+      if (attributes.found_duplicates) {
+        this._duplicates = attributes.found_duplicates;
       }
       
-      // Check for duplicates
-      if (!this._duplicates && hass.data?.duplicate_video_finder?.duplicates) {
-        this._duplicates = hass.data.duplicate_video_finder.duplicates;
+      // Update static state
+      DuplicateVideoFinderPanel._state = {
+        isScanning: this._isScanning,
+        isPaused: this._isPaused,
+        progress: this._progress,
+        currentFile: this._currentFile,
+        duplicates: this._duplicates,
+        stateInitialized: true,
+        lastUpdateTime: Date.now()
+      };
+
+      // Clear polling if scan is complete
+      if (!this._isScanning) {
+        this._clearPolling();
       }
     }
     
@@ -99,12 +134,25 @@ customElements.define(
       this._clearPolling();
       
       // Set up new timer if scanning
-      if (this._isScanning && !this._updateTimer) {
+      if (this._isScanning) {
+        console.log("Setting up polling for scan progress");
         this._updateTimer = setInterval(() => {
           if (this._hass) {
-            // Fetch latest state
-            this._updateStateFromHass(this._hass);
-            this.render();
+            this._hass.callApi('GET', 'states/duplicate_video_finder.scan_state')
+              .then(state => {
+                if (state) {
+                  // Force a state update
+                  this._updateStateFromHass({
+                    states: {
+                      'duplicate_video_finder.scan_state': state
+                    }
+                  });
+                  this.render();
+                }
+              })
+              .catch(error => {
+                console.error("Error polling scan state:", error);
+              });
           }
         }, 1000);
       }
@@ -570,6 +618,17 @@ customElements.define(
       this._isScanning = true;
       this._isPaused = false;
       
+      // Update static state
+      DuplicateVideoFinderPanel._state = {
+        ...DuplicateVideoFinderPanel._state,
+        isScanning: true,
+        isPaused: false,
+        progress: 0,
+        currentFile: "",
+        lastUpdateTime: Date.now()
+      };
+      
+      // Render immediately for better UX
       this.render();
       
       // Call the service
@@ -577,17 +636,21 @@ customElements.define(
         video_extensions: extensions,
         max_cpu_percent: maxCpu,
         batch_size: batchSize
-      }).catch(error => {
+      })
+      .then(() => {
+        // Set up polling immediately after successful service call
+        this._setupPolling();
+      })
+      .catch(error => {
         this._isScanning = false;
+        DuplicateVideoFinderPanel._state.isScanning = false;
+        
         const resultsContainer = this.shadowRoot.querySelector("#results");
         if (resultsContainer) {
           resultsContainer.innerHTML = `<p>Error: ${error.message}</p>`;
         }
         this.render();
       });
-      
-      // Set up polling
-      this._setupPolling();
     }
     
     _pauseScan() {
