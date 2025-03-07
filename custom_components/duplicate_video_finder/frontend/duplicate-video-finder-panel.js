@@ -7,6 +7,7 @@ customElements.define(
       this._hass = null;
       this._config = {};
       this._duplicates = null;
+      this._isScanning = false;
     }
 
     set hass(hass) {
@@ -53,6 +54,10 @@ customElements.define(
           button:hover {
             background-color: var(--dark-primary-color, #0288d1);
           }
+          button:disabled {
+            background-color: var(--disabled-text-color, #bdbdbd);
+            cursor: not-allowed;
+          }
           .form-group {
             margin-bottom: 16px;
           }
@@ -67,52 +72,193 @@ customElements.define(
             border-radius: 4px;
             box-sizing: border-box;
           }
+          .spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            border-radius: 50%;
+            border-top: 4px solid var(--primary-color, #03a9f4);
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+          }
+          @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+          }
+          .duplicate-group {
+            border: 1px solid #eee;
+            border-radius: 4px;
+            margin-bottom: 15px;
+            overflow: hidden;
+          }
+          .group-header {
+            background: #f5f5f5;
+            padding: 10px 15px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+          }
+          .group-content {
+            padding: 0 15px;
+            display: none;
+          }
+          .duplicate-group.expanded .group-content {
+            display: block;
+          }
+          .file-item {
+            padding: 10px 0;
+            border-bottom: 1px solid #eee;
+          }
+          .file-item:last-child {
+            border-bottom: none;
+          }
+          .file-name {
+            font-weight: 500;
+            margin-bottom: 5px;
+          }
+          .file-path {
+            font-size: 12px;
+            color: #666;
+            word-break: break-all;
+          }
         </style>
         <div class="card">
           <div class="card-header">
             <h2>Duplicate Video Finder</h2>
           </div>
-          <div class="form-group">
-            <label for="directories">Directories to scan (comma separated)</label>
-            <input type="text" id="directories" placeholder="/media/videos, /home/user/movies">
-          </div>
+          <p>This tool will automatically scan all accessible directories on your system for duplicate video files.</p>
           <div class="form-group">
             <label for="extensions">Video extensions (comma separated)</label>
             <input type="text" id="extensions" value=".mp4, .avi, .mkv, .mov, .wmv, .flv, .webm">
           </div>
-          <button id="scan-button">Start Scan</button>
+          <button id="scan-button" ${this._isScanning ? 'disabled' : ''}>
+            ${this._isScanning ? 'Scanning...' : 'Start Scan'}
+          </button>
           <div id="results" style="margin-top: 16px;">
-            <p>Enter directories to scan and click "Start Scan" to find duplicate videos.</p>
+            ${this._isScanning ? 
+              '<div class="spinner"></div><p style="text-align: center;">Scanning for duplicate videos...</p>' : 
+              '<p>Click "Start Scan" to find duplicate videos across all accessible directories.</p>'}
           </div>
         </div>
       `;
 
       const scanButton = this.shadowRoot.querySelector("#scan-button");
       scanButton.addEventListener("click", () => this._startScan());
+      
+      // Add event listeners for group expansion if results are showing
+      const groupHeaders = this.shadowRoot.querySelectorAll('.group-header');
+      groupHeaders.forEach(header => {
+        header.addEventListener('click', () => {
+          const group = header.closest('.duplicate-group');
+          group.classList.toggle('expanded');
+        });
+      });
     }
 
     _startScan() {
-      const directoriesInput = this.shadowRoot.querySelector("#directories");
+      if (this._isScanning) return;
+      
       const extensionsInput = this.shadowRoot.querySelector("#extensions");
       const resultsContainer = this.shadowRoot.querySelector("#results");
+      const scanButton = this.shadowRoot.querySelector("#scan-button");
       
-      const directories = directoriesInput.value.split(",").map(dir => dir.trim()).filter(Boolean);
       const extensions = extensionsInput.value.split(",").map(ext => ext.trim()).filter(Boolean);
       
-      if (directories.length === 0) {
-        resultsContainer.innerHTML = "<p>Please enter at least one directory to scan</p>";
-        return;
-      }
-      
-      resultsContainer.innerHTML = "<p>Scanning for duplicate videos...</p>";
+      // Update UI to show scanning state
+      this._isScanning = true;
+      scanButton.disabled = true;
+      scanButton.textContent = 'Scanning...';
+      resultsContainer.innerHTML = '<div class="spinner"></div><p style="text-align: center;">Scanning for duplicate videos across all accessible directories...</p>';
       
       // Call the service
       this._hass.callService("duplicate_video_finder", "find_duplicates", {
         video_extensions: extensions
       }).then(() => {
-        resultsContainer.innerHTML = "<p>Scan complete! Check Home Assistant logs for results.</p>";
+        // Poll for results every 2 seconds
+        this._pollForResults();
       }).catch(error => {
+        this._isScanning = false;
+        scanButton.disabled = false;
+        scanButton.textContent = 'Start Scan';
         resultsContainer.innerHTML = `<p>Error: ${error.message}</p>`;
+      });
+    }
+    
+    _pollForResults() {
+      // Check if results are available in hass.data
+      if (this._hass.data && this._hass.data.duplicate_video_finder && this._hass.data.duplicate_video_finder.duplicates) {
+        const duplicates = this._hass.data.duplicate_video_finder.duplicates;
+        this._displayResults(duplicates);
+      } else {
+        // Check again in 2 seconds
+        setTimeout(() => this._pollForResults(), 2000);
+      }
+    }
+    
+    _displayResults(duplicates) {
+      const resultsContainer = this.shadowRoot.querySelector("#results");
+      const scanButton = this.shadowRoot.querySelector("#scan-button");
+      
+      // Reset scanning state
+      this._isScanning = false;
+      scanButton.disabled = false;
+      scanButton.textContent = 'Start Scan';
+      
+      const duplicateGroups = Object.entries(duplicates);
+      
+      if (duplicateGroups.length === 0) {
+        resultsContainer.innerHTML = `
+          <p>No duplicate videos found.</p>
+        `;
+        return;
+      }
+      
+      // Count total duplicates
+      let totalDuplicates = 0;
+      duplicateGroups.forEach(([_, files]) => {
+        totalDuplicates += files.length - 1; // Subtract 1 to count only duplicates
+      });
+      
+      let html = `
+        <div style="margin: 16px 0;">
+          Found ${duplicateGroups.length} groups with a total of ${totalDuplicates} duplicate files.
+        </div>
+      `;
+      
+      duplicateGroups.forEach(([hash, files]) => {
+        html += `
+          <div class="duplicate-group">
+            <div class="group-header">
+              <span>${files.length} duplicate files</span>
+              <span>${hash.substring(0, 8)}...</span>
+            </div>
+            <div class="group-content">
+              ${files.map(file => {
+                const parts = file.split('/');
+                const filename = parts[parts.length - 1];
+                const directory = parts.slice(0, -1).join('/');
+                
+                return `
+                  <div class="file-item">
+                    <div class="file-name">${filename}</div>
+                    <div class="file-path">${directory}</div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+        `;
+      });
+      
+      resultsContainer.innerHTML = html;
+      
+      // Add event listeners for group expansion
+      const groupHeaders = this.shadowRoot.querySelectorAll('.group-header');
+      groupHeaders.forEach(header => {
+        header.addEventListener('click', () => {
+          const group = header.closest('.duplicate-group');
+          group.classList.toggle('expanded');
+        });
       });
     }
   }
@@ -120,7 +266,7 @@ customElements.define(
 
 window.customCards = window.customCards || [];
 window.customCards.push({
-    type: 'duplicate-video-finder-panel',
-    name: 'Duplicate Video Finder',
-    preview: true,
+  type: "duplicate-video-finder-panel",
+  name: "Duplicate Video Finder",
+  preview: true,
 }); 

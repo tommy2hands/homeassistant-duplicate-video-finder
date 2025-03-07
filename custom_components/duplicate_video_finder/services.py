@@ -87,6 +87,15 @@ def get_accessible_directories() -> List[str]:
     # Start from root directory
     root_dirs = ["/", "/home", "/media", "/mnt", "/storage"]
     
+    # Add Windows-specific paths if running on Windows
+    if os.name == 'nt':
+        # Get all drive letters
+        import string
+        for letter in string.ascii_uppercase:
+            drive = f"{letter}:\\"
+            if os.path.exists(drive):
+                root_dirs.append(drive)
+    
     for root_dir in root_dirs:
         if os.path.exists(root_dir):
             try:
@@ -192,7 +201,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         """Handle the find_duplicates service call."""
         video_exts = call.data.get(CONF_VIDEO_EXTENSIONS, DEFAULT_VIDEO_EXTENSIONS)
         
-        _LOGGER.info("Starting duplicate video scan")
+        _LOGGER.info("Starting duplicate video scan of all accessible directories")
         duplicates = await find_duplicate_videos(hass, video_exts)
         
         # Store the results in hass.data for the frontend to access
