@@ -1,0 +1,29 @@
+name: Validate
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  validate:
+    runs-on: "ubuntu-latest"
+    steps:
+      - uses: "actions/checkout@v3"
+      - name: Set up Python
+        uses: "actions/setup-python@v4"
+        with:
+          python-version: "3.x"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pylint pytest black isort
+      - name: Run black
+        run: black --check .
+      - name: Run isort
+        run: isort --check-only .
+      - name: Run pylint
+        run: pylint custom_components/duplicate_video_finder
+      - name: Run pytest
+        run: pytest 

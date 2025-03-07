@@ -1,0 +1,14 @@
+{
+  "domain": "duplicate_video_finder",
+  "name": "Duplicate Video Finder",
+  "documentation": "https://github.com/yourusername/homeassistantapp",
+  "dependencies": [],
+  "codeowners": [],
+  "requirements": [],
+  "version": "1.0.0",
+  "iot_standards": [],
+  "logotype": "duplicate_video_finder.png",
+  "homeassistant": {
+    "min_version": "2023.8.0"
+  }
+} 
