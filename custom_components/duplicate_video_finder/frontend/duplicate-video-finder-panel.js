@@ -1,173 +1,141 @@
 customElements.define(
   "duplicate-video-finder-panel",
   class DuplicateVideoFinderPanel extends HTMLElement {
-    // Define static state
-    static _state = {
-      isScanning: false,
-      isPaused: false,
-      progress: 0,
-      currentFile: "",
-      duplicates: null,
-      stateInitialized: false,
-      lastUpdateTime: Date.now()
-    };
-
     constructor() {
       super();
       this.attachShadow({ mode: "open" });
+      
+      // Basic properties
       this._hass = null;
       this._config = {};
       this._updateTimer = null;
       this._eventListenersAttached = false;
-      this._version = "1.1.3"; // Version number
+      this._version = "1.1.4";
       
-      // Initialize from static state
-      this._initializeFromStaticState();
-    }
-
-    _initializeFromStaticState() {
-      // Ensure static state exists
-      if (!DuplicateVideoFinderPanel._state) {
-        DuplicateVideoFinderPanel._state = {
-          isScanning: false,
-          isPaused: false,
-          progress: 0,
-          currentFile: "",
-          duplicates: null,
-          stateInitialized: false,
-          lastUpdateTime: Date.now()
-        };
-      }
+      // State properties with defaults
+      this._isScanning = false;
+      this._isPaused = false;
+      this._progress = 0;
+      this._currentFile = "";
+      this._duplicates = null;
+      this._stateInitialized = false;
       
-      // Copy static state to instance
-      this._isScanning = DuplicateVideoFinderPanel._state.isScanning;
-      this._isPaused = DuplicateVideoFinderPanel._state.isPaused;
-      this._progress = DuplicateVideoFinderPanel._state.progress;
-      this._currentFile = DuplicateVideoFinderPanel._state.currentFile;
-      this._duplicates = DuplicateVideoFinderPanel._state.duplicates;
-      this._stateInitialized = DuplicateVideoFinderPanel._state.stateInitialized;
+      // Initialize UI
+      this.render();
     }
 
     set hass(hass) {
-      try {
-        const oldHass = this._hass;
-        this._hass = hass;
-        
-        // Always check scan state first to ensure we have the latest state
-        this._updateStateFromHass(hass);
-        
-        // Only re-render if something relevant has changed or we haven't initialized yet
-        if (!this._stateInitialized || this._hasStateChanged(oldHass)) {
-          this.render();
-          this._stateInitialized = true;
-        }
-        
-        // Set up polling for progress updates during scanning
-        this._setupPolling();
-      } catch (error) {
-        console.error('Error in hass setter:', error);
-        // Ensure we still render even if there's an error
+      // Store previous hass for comparison
+      const oldHass = this._hass;
+      this._hass = hass;
+      
+      // Handle scan state updates
+      this._updateScanState(hass);
+      
+      // Render if state has changed or not initialized yet
+      if (!this._stateInitialized || (oldHass && this._hasStateChanged(oldHass))) {
         this.render();
+        this._stateInitialized = true;
+      }
+      
+      // Set up polling for updates if scanning
+      if (this._isScanning && !this._updateTimer) {
+        this._setupPolling();
       }
     }
-    
-    _updateStateFromHass(hass) {
-      try {
-        if (!hass?.states?.['duplicate_video_finder.scan_state']) {
-          return;
-        }
 
-        const scanState = hass.states['duplicate_video_finder.scan_state'].state;
-        const attributes = hass.states['duplicate_video_finder.scan_state'].attributes || {};
-        
-        // Update local state based on the entity state
-        this._isScanning = scanState === 'scanning';
-        this._isPaused = scanState === 'paused';
-        this._progress = attributes.progress || 0;
-        this._currentFile = attributes.current_file || '';
-        
-        // Update duplicates if available
-        if (attributes.found_duplicates) {
-          this._duplicates = attributes.found_duplicates;
-        }
-        
-        // Update static state
-        DuplicateVideoFinderPanel._state = {
-          isScanning: this._isScanning,
-          isPaused: this._isPaused,
-          progress: this._progress,
-          currentFile: this._currentFile,
-          duplicates: this._duplicates,
-          stateInitialized: true,
-          lastUpdateTime: Date.now()
-        };
+    _updateScanState(hass) {
+      // Return if hass or scan state doesn't exist
+      if (!hass || !hass.states || !hass.states['duplicate_video_finder.scan_state']) {
+        return;
+      }
 
-        // Clear polling if scan is complete
-        if (!this._isScanning) {
-          this._clearPolling();
-        }
-      } catch (error) {
-        console.error('Error updating state from hass:', error);
+      // Get state and attributes
+      const entity = hass.states['duplicate_video_finder.scan_state'];
+      const attributes = entity.attributes || {};
+      
+      // Update scan state properties
+      this._isScanning = entity.state === 'scanning';
+      this._isPaused = entity.state === 'paused';
+      this._progress = parseFloat(attributes.progress || 0);
+      this._currentFile = attributes.current_file || '';
+      
+      // Update duplicates if available
+      if (attributes.found_duplicates) {
+        this._duplicates = attributes.found_duplicates;
+      }
+      
+      // Clear polling if scan is complete
+      if (!this._isScanning && this._updateTimer) {
+        this._clearPolling();
       }
     }
-    
+
     _hasStateChanged(oldHass) {
-      if (!oldHass) return true;
+      // Check if hass exists
+      if (!oldHass || !oldHass.states || !oldHass.states['duplicate_video_finder.scan_state']) {
+        return true;
+      }
+
+      // Get old state and attributes
+      const oldEntity = oldHass.states['duplicate_video_finder.scan_state'];
+      const oldAttributes = oldEntity.attributes || {};
       
-      const oldScanState = oldHass.data?.duplicate_video_finder?.scan_state || {};
-      const newScanState = this._hass.data?.duplicate_video_finder?.scan_state || {};
-      
-      return (
-        this._isScanning !== oldScanState.is_scanning ||
-        this._isPaused !== oldScanState.is_paused ||
-        Math.abs(this._progress - (oldScanState.processed_files || 0) * 100) > 1 ||
-        this._currentFile !== oldScanState.current_file ||
-        JSON.stringify(this._duplicates) !== JSON.stringify(oldHass.data?.duplicate_video_finder?.duplicates || {})
-      );
+      // Compare scan state properties
+      return this._isScanning !== (oldEntity.state === 'scanning') ||
+             this._isPaused !== (oldEntity.state === 'paused') ||
+             this._progress !== parseFloat(oldAttributes.progress || 0) ||
+             this._currentFile !== (oldAttributes.current_file || '') ||
+             JSON.stringify(this._duplicates) !== JSON.stringify(oldAttributes.found_duplicates || {});
     }
 
     connectedCallback() {
-      // When the element is added to the DOM, initialize it
+      // Render the UI if it's empty
       if (!this.shadowRoot.innerHTML) {
         this.render();
       }
       
-      // Always set up polling when connected to ensure we catch ongoing scans
-      this._setupPolling();
+      // Set up polling if we're scanning
+      if (this._isScanning) {
+        this._setupPolling();
+      }
       
-      // Force a state update when reconnecting
+      // Force state update if hass is available
       if (this._hass) {
-        this._updateStateFromHass(this._hass);
+        this._updateScanState(this._hass);
         this.render();
       }
     }
 
     disconnectedCallback() {
-      // When the element is removed from the DOM, clean up
-      this._clearPolling();
+      // Clean up resources but don't reset state
+      if (this._updateTimer) {
+        this._clearPolling();
+      }
       this._removeEventListeners();
-      
-      // We don't reset state here, so it persists when navigating away
     }
-    
+
     _setupPolling() {
-      // Clear existing timer if any
+      // Clear existing timer
       this._clearPolling();
       
-      // Set up new timer if scanning
+      // Set up new timer for progress updates
       if (this._isScanning) {
-        console.log("Setting up polling for scan progress");
         this._updateTimer = setInterval(() => {
           if (this._hass) {
+            // Directly get the latest state
             this._hass.callApi('GET', 'states/duplicate_video_finder.scan_state')
               .then(state => {
                 if (state) {
-                  // Force a state update
-                  this._updateStateFromHass({
+                  // Create a temporary hass object with the scan state
+                  const tempHass = {
                     states: {
                       'duplicate_video_finder.scan_state': state
                     }
-                  });
+                  };
+                  
+                  // Update state and render
+                  this._updateScanState(tempHass);
                   this.render();
                 }
               })
@@ -178,8 +146,9 @@ customElements.define(
         }, 1000);
       }
     }
-    
+
     _clearPolling() {
+      // Clear the update timer
       if (this._updateTimer) {
         clearInterval(this._updateTimer);
         this._updateTimer = null;
@@ -187,547 +156,455 @@ customElements.define(
     }
 
     render() {
-      try {
-        if (!this._hass) {
-          this.shadowRoot.innerHTML = `
-            <div style="padding: 20px; text-align: center;">
-              Loading Duplicate Video Finder...
-            </div>
-          `;
-          return;
-        }
-
+      // Basic loading or error state
+      if (!this._hass) {
         this.shadowRoot.innerHTML = `
-          <style>
-            :host {
-              display: block;
-              padding: 16px;
-              position: relative;
-              min-height: calc(100vh - 32px);
-            }
-            .card {
-              background-color: var(--card-background-color, white);
-              border-radius: 4px;
-              box-shadow: 0 2px 2px 0 rgba(0,0,0,.14),0 1px 5px 0 rgba(0,0,0,.12),0 3px 1px -2px rgba(0,0,0,.2);
-              padding: 16px;
-              margin-bottom: 16px;
-            }
-            .card-header {
-              display: flex;
-              justify-content: space-between;
-              align-items: center;
-              margin-bottom: 16px;
-            }
-            .card-header h2 {
-              margin: 0;
-              font-size: 24px;
-              font-weight: 400;
-            }
-            .button-container {
-              display: flex;
-              gap: 8px;
-              margin-bottom: 16px;
-            }
-            button {
-              background-color: var(--primary-color, #03a9f4);
-              color: white;
-              border: none;
-              border-radius: 4px;
-              padding: 8px 16px;
-              font-size: 14px;
-              cursor: pointer;
-            }
-            button:hover {
-              background-color: var(--dark-primary-color, #0288d1);
-            }
-            button:disabled {
-              background-color: var(--disabled-text-color, #bdbdbd);
-              cursor: not-allowed;
-            }
-            button.secondary {
-              background-color: #757575;
-            }
-            button.secondary:hover {
-              background-color: #616161;
-            }
-            button.warning {
-              background-color: #f44336;
-            }
-            button.warning:hover {
-              background-color: #d32f2f;
-            }
-            .form-group {
-              margin-bottom: 16px;
-            }
-            label {
-              display: block;
-              margin-bottom: 8px;
-            }
-            input {
-              width: 100%;
-              padding: 8px;
-              border: 1px solid #ddd;
-              border-radius: 4px;
-              box-sizing: border-box;
-            }
-            .info-text {
-              margin-bottom: 16px;
-              color: var(--secondary-text-color, #666);
-            }
-            .progress-container {
-              margin-top: 16px;
-              margin-bottom: 16px;
-            }
-            .progress-bar {
-              height: 8px;
-              background-color: #e0e0e0;
-              border-radius: 4px;
-              overflow: hidden;
-            }
-            .progress-bar-fill {
-              height: 100%;
-              background-color: var(--primary-color, #03a9f4);
-              width: ${this._progress}%;
-              transition: width 0.3s ease;
-            }
-            .progress-text {
-              margin-top: 8px;
-              font-size: 14px;
-              color: var(--secondary-text-color, #666);
-            }
-            .current-file {
-              margin-top: 8px;
-              font-size: 12px;
-              color: var(--secondary-text-color, #666);
-              white-space: nowrap;
-              overflow: hidden;
-              text-overflow: ellipsis;
-            }
-            .duplicate-group {
-              border: 1px solid #eee;
-              border-radius: 4px;
-              margin-bottom: 15px;
-              overflow: hidden;
-            }
-            .group-header {
-              background: #f5f5f5;
-              padding: 10px 15px;
-              cursor: pointer;
-              display: flex;
-              justify-content: space-between;
-            }
-            .group-content {
-              padding: 0 15px;
-              display: none;
-            }
-            .duplicate-group.expanded .group-content {
-              display: block;
-            }
-            .file-item {
-              padding: 10px 0;
-              border-bottom: 1px solid #eee;
-            }
-            .file-item:last-child {
-              border-bottom: none;
-            }
-            .file-name {
-              font-weight: 500;
-              margin-bottom: 5px;
-            }
-            .file-path {
-              font-size: 12px;
-              color: #666;
-              word-break: break-all;
-            }
-            .advanced-options {
-              margin-top: 16px;
-              border-top: 1px solid #eee;
-              padding-top: 16px;
-            }
-            .advanced-options-header {
-              cursor: pointer;
-              user-select: none;
-              display: flex;
-              align-items: center;
-            }
-            .advanced-options-header h3 {
-              margin: 0;
-              font-size: 16px;
-              font-weight: 500;
-            }
-            .advanced-options-content {
-              margin-top: 16px;
-              display: none;
-            }
-            .advanced-options.expanded .advanced-options-content {
-              display: block;
-            }
-            .advanced-options-toggle {
-              margin-right: 8px;
-              transition: transform 0.3s;
-            }
-            .advanced-options.expanded .advanced-options-toggle {
-              transform: rotate(90deg);
-            }
-            .row {
-              display: flex;
-              gap: 16px;
-              margin-bottom: 16px;
-            }
-            .col {
-              flex: 1;
-            }
-            .status-badge {
-              display: inline-block;
-              padding: 4px 8px;
-              border-radius: 12px;
-              font-size: 12px;
-              font-weight: 500;
-              margin-left: 8px;
-            }
-            .status-badge.scanning {
-              background-color: #4caf50;
-              color: white;
-            }
-            .status-badge.paused {
-              background-color: #ff9800;
-              color: white;
-            }
-            .version {
-              position: fixed;
-              bottom: 16px;
-              right: 16px;
-              font-size: 12px;
-              color: var(--secondary-text-color, #666);
-              opacity: 0.8;
-            }
-          </style>
-          <div class="card">
-            <div class="card-header">
-              <h2>
-                Duplicate Video Finder
-                ${this._isScanning ? 
-                  `<span class="status-badge ${this._isPaused ? 'paused' : 'scanning'}">${this._isPaused ? 'Paused' : 'Scanning'}</span>` : 
-                  ''}
-              </h2>
-            </div>
-            <div class="info-text">
-              <p>This tool automatically scans all directories under <code>/home/*</code> for duplicate video files.</p>
-            </div>
-            
-            ${this._isScanning ? this._renderScanningUI() : this._renderScanForm()}
-            
-            <div class="advanced-options">
-              <div class="advanced-options-header" id="advanced-toggle">
-                <span class="advanced-options-toggle">▶</span>
-                <h3>Advanced Options</h3>
-              </div>
-              <div class="advanced-options-content">
-                <div class="row">
-                  <div class="col">
-                    <div class="form-group">
-                      <label for="max-cpu">Max CPU Usage (%)</label>
-                      <input type="number" id="max-cpu" value="70" min="10" max="100" ${this._isScanning ? 'disabled' : ''}>
-                    </div>
-                  </div>
-                  <div class="col">
-                    <div class="form-group">
-                      <label for="batch-size">Batch Size</label>
-                      <input type="number" id="batch-size" value="100" min="10" max="1000" ${this._isScanning ? 'disabled' : ''}>
-                    </div>
-                  </div>
-                </div>
-                <div class="form-group">
-                  <label for="extensions">Video Extensions (comma separated)</label>
-                  <input type="text" id="extensions" value=".mp4, .avi, .mkv, .mov, .wmv, .flv, .webm" ${this._isScanning ? 'disabled' : ''}>
-                </div>
-              </div>
-            </div>
-            
-            <div id="results" style="margin-top: 16px;">
-              ${this._renderResults()}
-            </div>
-          </div>
-          <div class="version">v${this._version}</div>
-        `;
-
-        // Add event listeners
-        this._removeEventListeners();
-        this._attachEventListeners();
-      } catch (error) {
-        console.error('Error in render:', error);
-        this.shadowRoot.innerHTML = `
-          <div style="padding: 20px; text-align: center; color: red;">
-            Error loading Duplicate Video Finder. Please refresh the page.
-            ${error.message}
+          <div style="padding: 20px; text-align: center;">
+            Loading Duplicate Video Finder...
           </div>
         `;
+        return;
       }
+
+      // Main UI
+      this.shadowRoot.innerHTML = `
+        <style>
+          .card {
+            padding: 16px;
+            background: var(--card-background-color, white);
+            box-shadow: var(--ha-card-box-shadow, 0 2px 2px 0 rgba(0, 0, 0, 0.14), 0 1px 5px 0 rgba(0, 0, 0, 0.12), 0 3px 1px -2px rgba(0, 0, 0, 0.2));
+            border-radius: var(--ha-card-border-radius, 4px);
+            margin-bottom: 16px;
+          }
+          .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+          }
+          .title {
+            font-size: 1.5rem;
+            font-weight: 500;
+            color: var(--primary-text-color);
+          }
+          .progress-bar {
+            width: 100%;
+            height: 24px;
+            background-color: var(--secondary-background-color);
+            border-radius: 12px;
+            overflow: hidden;
+            margin-bottom: 8px;
+          }
+          .progress-bar-fill {
+            height: 100%;
+            background-color: var(--primary-color);
+            border-radius: 12px;
+            transition: width 0.5s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 12px;
+            text-align: center;
+            min-width: 40px;
+          }
+          .flex-row {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 16px;
+          }
+          .scan-info {
+            margin-bottom: 16px;
+            color: var(--secondary-text-color);
+          }
+          .scan-status {
+            color: var(--primary-color);
+            font-weight: 500;
+          }
+          button {
+            background-color: var(--primary-color);
+            color: var(--text-primary-color);
+            border: none;
+            border-radius: 4px;
+            padding: 8px 16px;
+            cursor: pointer;
+            font-size: 14px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition: background-color 0.3s ease;
+          }
+          button:hover {
+            background-color: var(--dark-primary-color);
+          }
+          button:disabled {
+            background-color: var(--disabled-color, #ccc);
+            cursor: not-allowed;
+          }
+          .button-icon {
+            margin-right: 8px;
+          }
+          .form-group {
+            margin-bottom: 16px;
+          }
+          .form-control {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid var(--divider-color);
+            border-radius: 4px;
+            background-color: var(--primary-background-color);
+            color: var(--primary-text-color);
+          }
+          .accordion {
+            border: 1px solid var(--divider-color);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 16px;
+          }
+          .accordion-header {
+            background-color: var(--secondary-background-color);
+            padding: 12px 16px;
+            cursor: pointer;
+            font-weight: 500;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+          }
+          .accordion-content {
+            padding: 16px;
+            display: none;
+          }
+          .accordion-content.open {
+            display: block;
+          }
+          .duplicate-group {
+            margin-bottom: 16px;
+            border: 1px solid var(--divider-color);
+            border-radius: 4px;
+            overflow: hidden;
+          }
+          .duplicate-group-header {
+            background-color: var(--secondary-background-color);
+            padding: 12px 16px;
+            cursor: pointer;
+            font-weight: 500;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+          }
+          .duplicate-group-content {
+            padding: 16px;
+            display: none;
+          }
+          .duplicate-group-content.open {
+            display: block;
+          }
+          .duplicate-item {
+            margin-bottom: 8px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--divider-color);
+          }
+          .duplicate-item:last-child {
+            margin-bottom: 0;
+            padding-bottom: 0;
+            border-bottom: none;
+          }
+          .duplicate-path {
+            font-family: monospace;
+            word-break: break-all;
+          }
+          .duplicate-info {
+            font-size: 0.9em;
+            color: var(--secondary-text-color);
+          }
+          .version {
+            position: fixed;
+            bottom: 10px;
+            right: 10px;
+            font-size: 0.8em;
+            color: var(--secondary-text-color);
+            opacity: 0.7;
+          }
+        </style>
+        
+        <div class="card">
+          <div class="header">
+            <div class="title">Duplicate Video Finder</div>
+          </div>
+          
+          <div class="content">
+            ${this._isScanning ? this._renderScanningUI() : this._renderScanForm()}
+            ${this._duplicates ? this._renderResults() : ''}
+          </div>
+        </div>
+        
+        <div class="version">v${this._version}</div>
+      `;
+      
+      // Attach event listeners after rendering
+      this._removeEventListeners();
+      this._attachEventListeners();
     }
-    
+
     _renderScanForm() {
       return `
-        <button id="scan-button">Start Scan</button>
-      `;
-    }
-    
-    _renderScanningUI() {
-      return `
-        <div class="progress-container">
-          <div class="progress-bar">
-            <div class="progress-bar-fill"></div>
+        <div class="form-group">
+          <label for="extensions">Video Extensions (comma separated)</label>
+          <input type="text" id="extensions" class="form-control" placeholder="mp4, mkv, avi, mov" value="mp4, mkv, avi, mov">
+        </div>
+        
+        <div class="accordion">
+          <div class="accordion-header" id="advanced-header">
+            Advanced Options <span>▼</span>
           </div>
-          <div class="progress-text">
-            ${this._isPaused ? 'Paused' : 'Scanning'}: ${this._progress.toFixed(1)}% complete
-          </div>
-          ${this._currentFile ? `
-            <div class="current-file">
-              Current file: ${this._currentFile}
+          <div class="accordion-content" id="advanced-content">
+            <div class="form-group">
+              <label for="max-cpu">Max CPU Usage (%)</label>
+              <input type="number" id="max-cpu" class="form-control" min="10" max="100" value="70">
             </div>
-          ` : ''}
+            <div class="form-group">
+              <label for="batch-size">Batch Size</label>
+              <input type="number" id="batch-size" class="form-control" min="10" max="1000" value="100">
+            </div>
+          </div>
         </div>
-        <div class="button-container">
-          ${this._isPaused ? 
-            `<button id="resume-button">Resume Scan</button>` : 
-            `<button id="pause-button">Pause Scan</button>`
+        
+        <button id="start-scan" class="primary">
+          <span class="button-icon">▶</span> Start Scan
+        </button>
+      `;
+    }
+
+    _renderScanningUI() {
+      const statusText = this._isPaused ? 'Paused' : 'Scanning';
+      const progressPercent = Math.min(100, Math.max(0, this._progress)).toFixed(1);
+      
+      return `
+        <div class="scan-info">
+          <div class="scan-status">${statusText} (${progressPercent}% complete)</div>
+          <div>Current file: ${this._currentFile || 'Initializing...'}</div>
+        </div>
+        
+        <div class="progress-bar">
+          <div class="progress-bar-fill" style="width: ${progressPercent}%">${progressPercent}%</div>
+        </div>
+        
+        <div class="flex-row">
+          ${this._isPaused 
+            ? `<button id="resume-scan" class="primary"><span class="button-icon">▶</span> Resume</button>` 
+            : `<button id="pause-scan" class="primary"><span class="button-icon">⏸</span> Pause</button>`
           }
-          <button id="cancel-button" class="warning">Cancel Scan</button>
+          <button id="cancel-scan" class="secondary"><span class="button-icon">⏹</span> Cancel</button>
         </div>
       `;
     }
-    
+
     _renderResults() {
-      if (this._isScanning) {
-        return '';
-      }
-      
       if (!this._duplicates || Object.keys(this._duplicates).length === 0) {
-        return `<p>Click "Start Scan" to find duplicate videos in all /home/* directories.</p>`;
+        return `<div style="margin-top: 16px;">No duplicates found.</div>`;
       }
       
-      const duplicateGroups = Object.entries(this._duplicates);
-      let totalDuplicates = 0;
+      const groupKeys = Object.keys(this._duplicates);
+      const totalGroups = groupKeys.length;
+      const totalFiles = groupKeys.reduce((total, key) => total + this._duplicates[key].length, 0);
       
-      duplicateGroups.forEach(([hash, files]) => {
-        totalDuplicates += files.length - 1; // Subtract 1 to count only duplicates
+      let html = `
+        <div style="margin-top: 24px; margin-bottom: 16px;">
+          <h3>Duplicates Found</h3>
+          <div>${totalGroups} duplicate groups with ${totalFiles} total files</div>
+        </div>
+      `;
+      
+      groupKeys.forEach((key, index) => {
+        const files = this._duplicates[key];
+        html += `
+          <div class="duplicate-group">
+            <div class="duplicate-group-header" data-group="${index}">
+              Group ${index + 1} (${files.length} files) <span>▼</span>
+            </div>
+            <div class="duplicate-group-content" id="group-${index}">
+              ${files.map(file => `
+                <div class="duplicate-item">
+                  <div class="duplicate-path">${file.path}</div>
+                  <div class="duplicate-info">
+                    Size: ${this._formatSize(file.size)} | 
+                    Created: ${new Date(file.created * 1000).toLocaleString()}
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        `;
       });
       
-      return `
-        <div style="margin-bottom: 16px;">
-          <p>Found ${duplicateGroups.length} groups with a total of ${totalDuplicates} duplicate files.</p>
-        </div>
-        ${duplicateGroups.map(([hash, files]) => `
-          <div class="duplicate-group">
-            <div class="group-header">
-              <span>${files.length} duplicate files</span>
-              <span>${hash.substring(0, 8)}...</span>
-            </div>
-            <div class="group-content">
-              ${files.map(file => {
-                const parts = file.split('/');
-                const filename = parts[parts.length - 1];
-                const directory = parts.slice(0, -1).join('/');
-                
-                return `
-                  <div class="file-item">
-                    <div class="file-name">${filename}</div>
-                    <div class="file-path">${directory}</div>
-                  </div>
-                `;
-              }).join('')}
-            </div>
-          </div>
-        `).join('')}
-      `;
+      return html;
     }
-    
+
+    _formatSize(bytes) {
+      const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+      if (bytes === 0) return '0 Bytes';
+      const i = parseInt(Math.floor(Math.log(bytes) / Math.log(1024)));
+      return (bytes / Math.pow(1024, i)).toFixed(2) + ' ' + sizes[i];
+    }
+
     _removeEventListeners() {
-      // Remove existing event listeners to prevent duplicates
-      if (this._eventListenersAttached) {
-        const scanButton = this.shadowRoot.querySelector("#scan-button");
-        if (scanButton) {
-          scanButton.removeEventListener("click", this._boundStartScan);
-        }
-        
-        const pauseButton = this.shadowRoot.querySelector("#pause-button");
-        if (pauseButton) {
-          pauseButton.removeEventListener("click", this._boundPauseScan);
-        }
-        
-        const resumeButton = this.shadowRoot.querySelector("#resume-button");
-        if (resumeButton) {
-          resumeButton.removeEventListener("click", this._boundResumeScan);
-        }
-        
-        const cancelButton = this.shadowRoot.querySelector("#cancel-button");
-        if (cancelButton) {
-          cancelButton.removeEventListener("click", this._boundCancelScan);
-        }
-        
-        const advancedToggle = this.shadowRoot.querySelector("#advanced-toggle");
-        if (advancedToggle) {
-          advancedToggle.removeEventListener("click", this._boundToggleAdvanced);
-        }
-        
-        const groupHeaders = this.shadowRoot.querySelectorAll('.group-header');
-        groupHeaders.forEach(header => {
-          header.removeEventListener('click', this._boundToggleGroup);
-        });
-        
-        this._eventListenersAttached = false;
-      }
+      // Remove event listeners to prevent memory leaks
+      this._eventListenersAttached = false;
     }
 
     _attachEventListeners() {
-      // Create bound methods if they don't exist
-      if (!this._boundStartScan) {
-        this._boundStartScan = this._startScan.bind(this);
-        this._boundPauseScan = this._pauseScan.bind(this);
-        this._boundResumeScan = this._resumeScan.bind(this);
-        this._boundCancelScan = this._cancelScan.bind(this);
-        this._boundToggleAdvanced = this._toggleAdvanced.bind(this);
-        this._boundToggleGroup = this._toggleGroup.bind(this);
+      if (this._eventListenersAttached) return;
+      
+      // Start scan button
+      const startButton = this.shadowRoot.querySelector('#start-scan');
+      if (startButton) {
+        startButton.addEventListener('click', () => this._startScan());
       }
       
-      // Scan button
-      const scanButton = this.shadowRoot.querySelector("#scan-button");
-      if (scanButton) {
-        scanButton.addEventListener("click", this._boundStartScan);
-      }
-      
-      // Pause button
-      const pauseButton = this.shadowRoot.querySelector("#pause-button");
+      // Pause scan button
+      const pauseButton = this.shadowRoot.querySelector('#pause-scan');
       if (pauseButton) {
-        pauseButton.addEventListener("click", this._boundPauseScan);
+        pauseButton.addEventListener('click', () => this._pauseScan());
       }
       
-      // Resume button
-      const resumeButton = this.shadowRoot.querySelector("#resume-button");
+      // Resume scan button
+      const resumeButton = this.shadowRoot.querySelector('#resume-scan');
       if (resumeButton) {
-        resumeButton.addEventListener("click", this._boundResumeScan);
+        resumeButton.addEventListener('click', () => this._resumeScan());
       }
       
-      // Cancel button
-      const cancelButton = this.shadowRoot.querySelector("#cancel-button");
+      // Cancel scan button
+      const cancelButton = this.shadowRoot.querySelector('#cancel-scan');
       if (cancelButton) {
-        cancelButton.addEventListener("click", this._boundCancelScan);
+        cancelButton.addEventListener('click', () => this._cancelScan());
       }
       
-      // Advanced options toggle
-      const advancedToggle = this.shadowRoot.querySelector("#advanced-toggle");
-      if (advancedToggle) {
-        advancedToggle.addEventListener("click", this._boundToggleAdvanced);
+      // Advanced accordion toggle
+      const advancedHeader = this.shadowRoot.querySelector('#advanced-header');
+      if (advancedHeader) {
+        advancedHeader.addEventListener('click', () => this._toggleAdvanced());
       }
       
-      // Add event listeners for group expansion
-      const groupHeaders = this.shadowRoot.querySelectorAll('.group-header');
+      // Duplicate group toggles
+      const groupHeaders = this.shadowRoot.querySelectorAll('.duplicate-group-header');
       groupHeaders.forEach(header => {
-        header.addEventListener('click', this._boundToggleGroup);
+        header.addEventListener('click', (e) => this._toggleGroup(e));
       });
       
       this._eventListenersAttached = true;
     }
-    
-    _toggleAdvanced(e) {
-      const advancedOptions = this.shadowRoot.querySelector(".advanced-options");
-      advancedOptions.classList.toggle("expanded");
+
+    _toggleAdvanced() {
+      const content = this.shadowRoot.querySelector('#advanced-content');
+      if (content) {
+        content.classList.toggle('open');
+        
+        const header = this.shadowRoot.querySelector('#advanced-header');
+        if (header) {
+          const arrow = header.querySelector('span');
+          if (arrow) {
+            arrow.textContent = content.classList.contains('open') ? '▲' : '▼';
+          }
+        }
+      }
     }
-    
+
     _toggleGroup(e) {
-      const group = e.currentTarget.closest('.duplicate-group');
-      group.classList.toggle('expanded');
+      const header = e.currentTarget;
+      const groupIndex = header.getAttribute('data-group');
+      const content = this.shadowRoot.querySelector(`#group-${groupIndex}`);
+      
+      if (content) {
+        content.classList.toggle('open');
+        
+        const arrow = header.querySelector('span');
+        if (arrow) {
+          arrow.textContent = content.classList.contains('open') ? '▲' : '▼';
+        }
+      }
     }
 
     _startScan() {
+      // Don't start if already scanning
       if (this._isScanning) return;
       
-      // Get advanced options
-      const extensionsInput = this.shadowRoot.querySelector("#extensions");
-      const maxCpuInput = this.shadowRoot.querySelector("#max-cpu");
-      const batchSizeInput = this.shadowRoot.querySelector("#batch-size");
+      // Get scan options
+      const extensionsInput = this.shadowRoot.querySelector('#extensions');
+      const maxCpuInput = this.shadowRoot.querySelector('#max-cpu');
+      const batchSizeInput = this.shadowRoot.querySelector('#batch-size');
       
-      const extensions = extensionsInput.value.split(",").map(ext => ext.trim()).filter(Boolean);
-      const maxCpu = parseInt(maxCpuInput.value) || 70;
-      const batchSize = parseInt(batchSizeInput.value) || 100;
+      // Parse values with defaults
+      const extensions = extensionsInput?.value.split(',').map(ext => ext.trim()).filter(Boolean) || ['mp4', 'mkv', 'avi', 'mov'];
+      const maxCpu = parseInt(maxCpuInput?.value) || 70;
+      const batchSize = parseInt(batchSizeInput?.value) || 100;
       
-      // Reset progress
-      this._progress = 0;
-      this._currentFile = "";
+      // Update UI state immediately
       this._isScanning = true;
       this._isPaused = false;
-      
-      // Update static state
-      DuplicateVideoFinderPanel._state = {
-        ...DuplicateVideoFinderPanel._state,
-        isScanning: true,
-        isPaused: false,
-        progress: 0,
-        currentFile: "",
-        lastUpdateTime: Date.now()
-      };
-      
-      // Render immediately for better UX
+      this._progress = 0;
+      this._currentFile = '';
       this.render();
       
       // Call the service
-      this._hass.callService("duplicate_video_finder", "find_duplicates", {
+      this._hass.callService('duplicate_video_finder', 'find_duplicates', {
         video_extensions: extensions,
         max_cpu_percent: maxCpu,
         batch_size: batchSize
       })
       .then(() => {
-        // Set up polling immediately after successful service call
+        // Set up polling for updates
         this._setupPolling();
       })
       .catch(error => {
+        // Reset UI on error
         this._isScanning = false;
-        DuplicateVideoFinderPanel._state.isScanning = false;
-        
-        const resultsContainer = this.shadowRoot.querySelector("#results");
-        if (resultsContainer) {
-          resultsContainer.innerHTML = `<p>Error: ${error.message}</p>`;
-        }
+        console.error('Error starting scan:', error);
         this.render();
       });
     }
-    
+
     _pauseScan() {
       if (!this._isScanning || this._isPaused) return;
       
+      // Update UI immediately
       this._isPaused = true;
       this.render();
       
       // Call the service
-      this._hass.callService("duplicate_video_finder", "pause_scan", {}).catch(error => {
-        this._isPaused = false;
-        console.error("Error pausing scan:", error);
-        this.render();
-      });
+      this._hass.callService('duplicate_video_finder', 'pause_scan', {})
+        .catch(error => {
+          // Reset UI on error
+          this._isPaused = false;
+          console.error('Error pausing scan:', error);
+          this.render();
+        });
     }
-    
+
     _resumeScan() {
       if (!this._isScanning || !this._isPaused) return;
       
+      // Update UI immediately
       this._isPaused = false;
       this.render();
       
       // Call the service
-      this._hass.callService("duplicate_video_finder", "resume_scan", {}).catch(error => {
-        this._isPaused = true;
-        console.error("Error resuming scan:", error);
-        this.render();
-      });
+      this._hass.callService('duplicate_video_finder', 'resume_scan', {})
+        .catch(error => {
+          // Reset UI on error
+          this._isPaused = true;
+          console.error('Error resuming scan:', error);
+          this.render();
+        });
     }
-    
+
     _cancelScan() {
       if (!this._isScanning) return;
       
-      if (confirm("Are you sure you want to cancel the scan?")) {
-        // Call the service
-        this._hass.callService("duplicate_video_finder", "cancel_scan", {}).catch(error => {
-          console.error("Error cancelling scan:", error);
+      // Call the service
+      this._hass.callService('duplicate_video_finder', 'cancel_scan', {})
+        .catch(error => {
+          console.error('Error cancelling scan:', error);
         });
-      }
     }
   }
 );
