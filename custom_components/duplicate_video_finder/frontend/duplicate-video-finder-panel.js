@@ -13,6 +13,7 @@ customElements.define(
       this._currentFile = "";
       this._updateTimer = null;
       this._eventListenersAttached = false;
+      this._version = "1.1.0"; // Version number
     }
 
     set hass(hass) {
@@ -103,6 +104,8 @@ customElements.define(
           :host {
             display: block;
             padding: 16px;
+            position: relative;
+            min-height: calc(100vh - 32px);
           }
           .card {
             background-color: var(--card-background-color, white);
@@ -292,6 +295,14 @@ customElements.define(
             background-color: #ff9800;
             color: white;
           }
+          .version {
+            position: fixed;
+            bottom: 16px;
+            right: 16px;
+            font-size: 12px;
+            color: var(--secondary-text-color, #666);
+            opacity: 0.8;
+          }
         </style>
         <div class="card">
           <div class="card-header">
@@ -339,6 +350,7 @@ customElements.define(
             ${this._renderResults()}
           </div>
         </div>
+        <div class="version">v${this._version}</div>
       `;
 
       // Add event listeners
