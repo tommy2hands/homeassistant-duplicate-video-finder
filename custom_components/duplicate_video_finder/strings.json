@@ -19,8 +19,28 @@
         "video_extensions": {
           "name": "Video Extensions",
           "description": "List of video file extensions to scan for."
+        },
+        "max_cpu_percent": {
+          "name": "Max CPU Usage",
+          "description": "Maximum CPU usage percentage (10-100). Default is 70%."
+        },
+        "batch_size": {
+          "name": "Batch Size",
+          "description": "Number of files to process in a batch for memory management. Default is 100."
         }
       }
+    },
+    "pause_scan": {
+      "name": "Pause Scan",
+      "description": "Pause an ongoing duplicate video scan."
+    },
+    "resume_scan": {
+      "name": "Resume Scan",
+      "description": "Resume a paused duplicate video scan."
+    },
+    "cancel_scan": {
+      "name": "Cancel Scan",
+      "description": "Cancel an ongoing duplicate video scan."
     }
   }
 } 

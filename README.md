@@ -4,13 +4,16 @@ This custom integration for Home Assistant helps you find duplicate video files 
 
 ## Features
 
-- 🔍 Automatically scans all accessible directories for duplicate video files
+- 🔍 Automatically scans all directories under `/home/*` for duplicate video files
 - 🎥 Supports common video formats (mp4, avi, mkv, mov, wmv, flv, webm)
 - 🎨 User-friendly interface with expandable groups and file details
 - ⚡ Efficient file comparison using parallel processing and SHA-256 hashing
 - 🔒 Smart directory exclusion to avoid system and sensitive locations
-- 📊 Progress tracking and detailed logging
+- 📊 Real-time progress tracking with current file display
 - 🚀 One-click scanning from the UI
+- ⏸️ Pause, resume, and cancel scanning operations
+- 🖥️ CPU usage management to prevent system slowdowns
+- 💾 Memory optimization with batch processing
 
 ## Installation
 
@@ -41,29 +44,25 @@ After installation, you should see a "Duplicate Videos" item in your Home Assist
 4. Add the integration
 5. Restart Home Assistant
 
-### Method 2: Using the Web Interface Directly
+### Using the Interface
 
-If the sidebar item doesn't appear, you can access the web interface directly:
+1. Click on "Duplicate Videos" in the sidebar
+2. (Optional) Adjust advanced options:
+   - **Max CPU Usage**: Limit CPU usage during scanning (default: 70%)
+   - **Batch Size**: Number of files to process in a batch (default: 100)
+   - **Video Extensions**: Customize which file types to scan
+3. Click "Start Scan" to begin
+4. During scanning:
+   - View real-time progress with percentage and current file
+   - Pause/Resume the scan at any time
+   - Cancel the scan if needed
+5. Review results organized by duplicate groups
 
-1. Go to: http://your-home-assistant-url:8123/local/duplicate_video_finder/index.html
-2. Enter the directories you want to scan
-3. Click "Start Scan"
+### Service Calls
 
-### Method 3: Using the Standalone Script
+You can also trigger operations programmatically using these services:
 
-If you're having trouble with the integration, you can use the standalone script:
-
-1. Copy the `custom_components/duplicate_video_finder/standalone.py` file to your computer
-2. Run it with Python:
-
-```bash
-python standalone.py --directories /path/to/videos /another/path --extensions .mp4 .mkv
-```
-
-### Service Call
-
-You can also trigger a scan programmatically using the service:
-
+#### Find Duplicates
 ```yaml
 service: duplicate_video_finder.find_duplicates
 data:
@@ -71,7 +70,42 @@ data:
     - .mp4
     - .avi
     - .mkv
+  max_cpu_percent: 70  # Optional, default is 70%
+  batch_size: 100  # Optional, default is 100
 ```
+
+#### Pause Scan
+```yaml
+service: duplicate_video_finder.pause_scan
+```
+
+#### Resume Scan
+```yaml
+service: duplicate_video_finder.resume_scan
+```
+
+#### Cancel Scan
+```yaml
+service: duplicate_video_finder.cancel_scan
+```
+
+## Performance Optimizations
+
+This integration includes several performance optimizations:
+
+- **CPU Management**: Limits CPU usage to prevent system slowdowns
+- **Memory Optimization**: Processes files in batches to manage memory usage
+- **Parallel Processing**: Uses a thread pool to hash multiple files simultaneously
+- **Smart Directory Scanning**: Efficiently walks through directories while skipping excluded paths
+- **Pause/Resume**: Allows pausing resource-intensive scans during high system load
+- **Progress Tracking**: Shows real-time progress and current file being processed
+
+## Notes
+
+- The integration uses SHA-256 hashing to identify duplicate files, which is reliable but may take some time for large files
+- The scan automatically excludes system directories and sensitive locations for safety
+- For very large media libraries, consider using a lower CPU percentage and smaller batch size
+- The integration is designed to be memory-efficient, even with thousands of video files
 
 ## Troubleshooting
 
@@ -82,22 +116,6 @@ If you're having trouble with the integration:
 3. Try using the standalone script
 4. Make sure your Home Assistant version is 2023.8.0 or higher
 5. Try clearing your browser cache and restarting Home Assistant
-
-## Performance Optimizations
-
-This integration includes several performance optimizations:
-
-- **Parallel Processing**: Uses a thread pool to hash multiple files simultaneously
-- **Smart Directory Scanning**: Efficiently walks through directories while skipping excluded paths
-- **Incremental Scanning**: Processes files in batches to avoid memory issues
-- **Error Handling**: Gracefully handles permission errors and inaccessible files
-
-## Notes
-
-- The integration uses SHA-256 hashing to identify duplicate files, which is reliable but may take some time for large files
-- The scan automatically excludes system directories and sensitive locations for safety
-- For very large media libraries, the initial scan may take several minutes
-- The integration is designed to be memory-efficient, even with thousands of video files
 
 ## Contributing
 
