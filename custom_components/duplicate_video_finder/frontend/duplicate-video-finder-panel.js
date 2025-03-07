@@ -72,18 +72,9 @@ customElements.define(
             border-radius: 4px;
             box-sizing: border-box;
           }
-          .spinner {
-            border: 4px solid rgba(0, 0, 0, 0.1);
-            border-radius: 50%;
-            border-top: 4px solid var(--primary-color, #03a9f4);
-            width: 30px;
-            height: 30px;
-            animation: spin 1s linear infinite;
-            margin: 20px auto;
-          }
-          @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+          .info-text {
+            margin-bottom: 16px;
+            color: var(--secondary-text-color, #666);
           }
           .duplicate-group {
             border: 1px solid #eee;
@@ -126,7 +117,9 @@ customElements.define(
           <div class="card-header">
             <h2>Duplicate Video Finder</h2>
           </div>
-          <p>This tool will automatically scan all accessible directories on your system for duplicate video files.</p>
+          <div class="info-text">
+            <p>This tool automatically scans all directories under <code>/home/*</code> for duplicate video files.</p>
+          </div>
           <div class="form-group">
             <label for="extensions">Video extensions (comma separated)</label>
             <input type="text" id="extensions" value=".mp4, .avi, .mkv, .mov, .wmv, .flv, .webm">
@@ -135,9 +128,7 @@ customElements.define(
             ${this._isScanning ? 'Scanning...' : 'Start Scan'}
           </button>
           <div id="results" style="margin-top: 16px;">
-            ${this._isScanning ? 
-              '<div class="spinner"></div><p style="text-align: center;">Scanning for duplicate videos...</p>' : 
-              '<p>Click "Start Scan" to find duplicate videos across all accessible directories.</p>'}
+            <p>Click "Start Scan" to find duplicate videos in all /home/* directories.</p>
           </div>
         </div>
       `;
@@ -145,11 +136,11 @@ customElements.define(
       const scanButton = this.shadowRoot.querySelector("#scan-button");
       scanButton.addEventListener("click", () => this._startScan());
       
-      // Add event listeners for group expansion if results are showing
+      // Add event listeners for group expansion if we have results
       const groupHeaders = this.shadowRoot.querySelectorAll('.group-header');
       groupHeaders.forEach(header => {
-        header.addEventListener('click', () => {
-          const group = header.closest('.duplicate-group');
+        header.addEventListener('click', (e) => {
+          const group = e.currentTarget.closest('.duplicate-group');
           group.classList.toggle('expanded');
         });
       });
@@ -158,70 +149,52 @@ customElements.define(
     _startScan() {
       if (this._isScanning) return;
       
+      this._isScanning = true;
+      this.render();
+      
       const extensionsInput = this.shadowRoot.querySelector("#extensions");
       const resultsContainer = this.shadowRoot.querySelector("#results");
-      const scanButton = this.shadowRoot.querySelector("#scan-button");
       
       const extensions = extensionsInput.value.split(",").map(ext => ext.trim()).filter(Boolean);
       
-      // Update UI to show scanning state
-      this._isScanning = true;
-      scanButton.disabled = true;
-      scanButton.textContent = 'Scanning...';
-      resultsContainer.innerHTML = '<div class="spinner"></div><p style="text-align: center;">Scanning for duplicate videos across all accessible directories...</p>';
+      resultsContainer.innerHTML = "<p>Scanning for duplicate videos in /home/* directories...</p>";
       
       // Call the service
       this._hass.callService("duplicate_video_finder", "find_duplicates", {
         video_extensions: extensions
       }).then(() => {
-        // Poll for results every 2 seconds
-        this._pollForResults();
+        this._isScanning = false;
+        
+        // Try to get the results from hass.data
+        if (this._hass.data?.duplicate_video_finder?.duplicates) {
+          const duplicates = this._hass.data.duplicate_video_finder.duplicates;
+          this._displayResults(duplicates);
+        } else {
+          resultsContainer.innerHTML = "<p>Scan complete! Check Home Assistant logs for results.</p>";
+        }
+        
+        this.render();
       }).catch(error => {
         this._isScanning = false;
-        scanButton.disabled = false;
-        scanButton.textContent = 'Start Scan';
         resultsContainer.innerHTML = `<p>Error: ${error.message}</p>`;
+        this.render();
       });
-    }
-    
-    _pollForResults() {
-      // Check if results are available in hass.data
-      if (this._hass.data && this._hass.data.duplicate_video_finder && this._hass.data.duplicate_video_finder.duplicates) {
-        const duplicates = this._hass.data.duplicate_video_finder.duplicates;
-        this._displayResults(duplicates);
-      } else {
-        // Check again in 2 seconds
-        setTimeout(() => this._pollForResults(), 2000);
-      }
     }
     
     _displayResults(duplicates) {
       const resultsContainer = this.shadowRoot.querySelector("#results");
-      const scanButton = this.shadowRoot.querySelector("#scan-button");
-      
-      // Reset scanning state
-      this._isScanning = false;
-      scanButton.disabled = false;
-      scanButton.textContent = 'Start Scan';
-      
       const duplicateGroups = Object.entries(duplicates);
       
       if (duplicateGroups.length === 0) {
         resultsContainer.innerHTML = `
-          <p>No duplicate videos found.</p>
+          <p>No duplicate videos found in /home/* directories.</p>
         `;
         return;
       }
       
-      // Count total duplicates
-      let totalDuplicates = 0;
-      duplicateGroups.forEach(([_, files]) => {
-        totalDuplicates += files.length - 1; // Subtract 1 to count only duplicates
-      });
-      
       let html = `
-        <div style="margin: 16px 0;">
-          Found ${duplicateGroups.length} groups with a total of ${totalDuplicates} duplicate files.
+        <div style="margin-bottom: 16px;">
+          <p>Found ${duplicateGroups.length} groups of duplicate files.</p>
         </div>
       `;
       
@@ -252,11 +225,11 @@ customElements.define(
       
       resultsContainer.innerHTML = html;
       
-      // Add event listeners for group expansion
+      // Re-add event listeners for group expansion
       const groupHeaders = this.shadowRoot.querySelectorAll('.group-header');
       groupHeaders.forEach(header => {
-        header.addEventListener('click', () => {
-          const group = header.closest('.duplicate-group');
+        header.addEventListener('click', (e) => {
+          const group = e.currentTarget.closest('.duplicate-group');
           group.classList.toggle('expanded');
         });
       });
@@ -266,7 +239,7 @@ customElements.define(
 
 window.customCards = window.customCards || [];
 window.customCards.push({
-  type: "duplicate-video-finder-panel",
-  name: "Duplicate Video Finder",
-  preview: true,
+    type: 'duplicate-video-finder-panel',
+    name: 'Duplicate Video Finder',
+    preview: true,
 }); 

@@ -6,6 +6,7 @@ import hashlib
 import logging
 import os
 import time
+import glob
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Set, Tuple
 
@@ -80,31 +81,19 @@ def is_excluded_directory(path: str) -> bool:
     # Check if the path starts with any excluded directory
     return any(abs_path.startswith(excluded) for excluded in EXCLUDED_DIRS)
 
-def get_accessible_directories() -> List[str]:
-    """Get a list of all accessible directories on the system."""
-    accessible_dirs = []
+def get_home_directories() -> List[str]:
+    """Get a list of all directories under /home."""
+    home_dirs = []
     
-    # Start from root directory
-    root_dirs = ["/", "/home", "/media", "/mnt", "/storage"]
+    # Get all directories under /home
+    try:
+        # Use glob to find all directories under /home
+        home_dirs = glob.glob("/home/*")
+        _LOGGER.info("Found %d directories under /home", len(home_dirs))
+    except Exception as err:
+        _LOGGER.warning("Error accessing /home directory: %s", err)
     
-    # Add Windows-specific paths if running on Windows
-    if os.name == 'nt':
-        # Get all drive letters
-        import string
-        for letter in string.ascii_uppercase:
-            drive = f"{letter}:\\"
-            if os.path.exists(drive):
-                root_dirs.append(drive)
-    
-    for root_dir in root_dirs:
-        if os.path.exists(root_dir):
-            try:
-                # Only add the root directory itself, we'll walk through it later
-                accessible_dirs.append(root_dir)
-            except Exception as err:
-                _LOGGER.warning("Error accessing directory %s: %s", root_dir, err)
-    
-    return accessible_dirs
+    return home_dirs
 
 def find_video_files(directory: str, video_extensions: List[str]) -> List[str]:
     """Find all video files in a directory and its subdirectories."""
@@ -152,16 +141,22 @@ async def find_duplicate_videos(
     hass: HomeAssistant,
     video_extensions: List[str] = DEFAULT_VIDEO_EXTENSIONS,
 ) -> Dict[str, List[str]]:
-    """Find duplicate video files in all accessible directories."""
+    """Find duplicate video files in all home directories."""
     start_time = time.time()
     hash_dict: Dict[str, List[str]] = {}
-    accessible_dirs = get_accessible_directories()
     
-    _LOGGER.info("Starting scan of %d accessible directories", len(accessible_dirs))
+    # Get all directories under /home
+    home_dirs = get_home_directories()
+    
+    if not home_dirs:
+        _LOGGER.warning("No directories found under /home")
+        return {}
+    
+    _LOGGER.info("Starting scan of %d home directories", len(home_dirs))
     
     # First, find all video files
     all_video_files = []
-    for directory in accessible_dirs:
+    for directory in home_dirs:
         video_files = await hass.async_add_executor_job(
             find_video_files, directory, video_extensions
         )
@@ -201,7 +196,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         """Handle the find_duplicates service call."""
         video_exts = call.data.get(CONF_VIDEO_EXTENSIONS, DEFAULT_VIDEO_EXTENSIONS)
         
-        _LOGGER.info("Starting duplicate video scan of all accessible directories")
+        _LOGGER.info("Starting duplicate video scan in /home directories")
         duplicates = await find_duplicate_videos(hass, video_exts)
         
         # Store the results in hass.data for the frontend to access
