@@ -14,5 +14,16 @@
     "files",
     "storage",
     "media"
-  ]
+  ],
+  "version": "1.0.0",
+  "url": "https://github.com/tommy2hands/homeassistant-duplicate-video-finder",
+  "dependencies": [],
+  "codeowners": ["@tommy2hands"],
+  "config_flow": true,
+  "documentation": "https://github.com/tommy2hands/homeassistant-duplicate-video-finder",
+  "issue_tracker": "https://github.com/tommy2hands/homeassistant-duplicate-video-finder/issues",
+  "requirements": [],
+  "dependencies": [],
+  "iot_standards": [],
+  "integration_type": "integration"
 } 
