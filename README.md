@@ -31,14 +31,34 @@ This custom integration for Home Assistant helps you find duplicate video files 
 
 ## Usage
 
-After installation, you'll see a new "Duplicate Videos" item in your Home Assistant sidebar. Click on it to access the Duplicate Video Finder interface.
+### Method 1: Using the Integration
 
-### Finding Duplicates
+After installation, you should see a "Duplicate Videos" item in your Home Assistant sidebar. If you don't see it, try these steps:
 
-1. Open the Duplicate Video Finder panel from the sidebar
-2. Click the "Start Scan" button
-3. Wait for the scan to complete (this may take some time depending on the number of files)
-4. Review the results, organized by duplicate groups
+1. Go to Home Assistant Settings > Devices & Services
+2. Click "Add Integration"
+3. Search for "Duplicate Video Finder"
+4. Add the integration
+5. Restart Home Assistant
+
+### Method 2: Using the Web Interface Directly
+
+If the sidebar item doesn't appear, you can access the web interface directly:
+
+1. Go to: http://your-home-assistant-url:8123/local/duplicate_video_finder/index.html
+2. Enter the directories you want to scan
+3. Click "Start Scan"
+
+### Method 3: Using the Standalone Script
+
+If you're having trouble with the integration, you can use the standalone script:
+
+1. Copy the `custom_components/duplicate_video_finder/standalone.py` file to your computer
+2. Run it with Python:
+
+```bash
+python standalone.py --directories /path/to/videos /another/path --extensions .mp4 .mkv
+```
 
 ### Service Call
 
@@ -52,6 +72,16 @@ data:
     - .avi
     - .mkv
 ```
+
+## Troubleshooting
+
+If you're having trouble with the integration:
+
+1. Check the Home Assistant logs for any errors related to "duplicate_video_finder"
+2. Try accessing the web interface directly at http://your-home-assistant-url:8123/local/duplicate_video_finder/index.html
+3. Try using the standalone script
+4. Make sure your Home Assistant version is 2023.8.0 or higher
+5. Try clearing your browser cache and restarting Home Assistant
 
 ## Performance Optimizations
 
@@ -68,15 +98,6 @@ This integration includes several performance optimizations:
 - The scan automatically excludes system directories and sensitive locations for safety
 - For very large media libraries, the initial scan may take several minutes
 - The integration is designed to be memory-efficient, even with thousands of video files
-
-## Troubleshooting
-
-If you encounter any issues:
-
-1. Check the Home Assistant logs for detailed error messages
-2. Ensure Home Assistant has read access to your media directories
-3. For very large libraries, consider increasing the Home Assistant timeout settings
-4. If the scan seems stuck, check the logs for progress updates
 
 ## Contributing
 

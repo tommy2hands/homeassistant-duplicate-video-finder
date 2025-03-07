@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Duplicate Video Finder</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1 {
+            color: #03a9f4;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 10px;
+        }
+        .card {
+            background: white;
+            border-radius: 4px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+            padding: 20px;
+        }
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        .card-header h2 {
+            margin: 0;
+            font-size: 20px;
+        }
+        button {
+            background: #03a9f4;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        button:hover {
+            background: #0288d1;
+        }
+        button:disabled {
+            background: #bdbdbd;
+            cursor: not-allowed;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        .duplicate-group {
+            border: 1px solid #eee;
+            border-radius: 4px;
+            margin-bottom: 15px;
+            overflow: hidden;
+        }
+        .group-header {
+            background: #f5f5f5;
+            padding: 10px 15px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+        }
+        .group-content {
+            padding: 0 15px;
+            display: none;
+        }
+        .duplicate-group.expanded .group-content {
+            display: block;
+        }
+        .file-item {
+            padding: 10px 0;
+            border-bottom: 1px solid #eee;
+        }
+        .file-item:last-child {
+            border-bottom: none;
+        }
+        .file-name {
+            font-weight: 500;
+            margin-bottom: 5px;
+        }
+        .file-path {
+            font-size: 12px;
+            color: #666;
+            word-break: break-all;
+        }
+        .spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            border-radius: 50%;
+            border-top: 4px solid #03a9f4;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .empty-state {
+            text-align: center;
+            padding: 30px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <h1>Duplicate Video Finder</h1>
+    
+    <div class="card">
+        <div class="card-header">
+            <h2>Scan Settings</h2>
+        </div>
+        <div class="form-group">
+            <label for="directories">Directories to scan (comma separated)</label>
+            <input type="text" id="directories" placeholder="/media/videos, /home/user/movies">
+        </div>
+        <div class="form-group">
+            <label for="extensions">Video extensions (comma separated)</label>
+            <input type="text" id="extensions" value=".mp4, .avi, .mkv, .mov, .wmv, .flv, .webm">
+        </div>
+        <button id="scan-button">Start Scan</button>
+    </div>
+    
+    <div class="card">
+        <div class="card-header">
+            <h2>Results</h2>
+        </div>
+        <div id="results">
+            <div class="empty-state">
+                <p>No duplicate videos found. Start a scan to find duplicates.</p>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const scanButton = document.getElementById('scan-button');
+            const directoriesInput = document.getElementById('directories');
+            const extensionsInput = document.getElementById('extensions');
+            const resultsContainer = document.getElementById('results');
+            
+            scanButton.addEventListener('click', function() {
+                // Get input values
+                const directories = directoriesInput.value.split(',').map(dir => dir.trim()).filter(Boolean);
+                const extensions = extensionsInput.value.split(',').map(ext => ext.trim()).filter(Boolean);
+                
+                if (directories.length === 0) {
+                    alert('Please enter at least one directory to scan');
+                    return;
+                }
+                
+                // Show loading state
+                scanButton.disabled = true;
+                scanButton.textContent = 'Scanning...';
+                resultsContainer.innerHTML = '<div class="spinner"></div><p style="text-align: center;">Scanning for duplicate videos...</p>';
+                
+                // In a real implementation, this would call the Home Assistant service
+                // For this demo, we'll simulate finding some duplicates after a delay
+                setTimeout(function() {
+                    // Simulate results
+                    const duplicates = {
+                        "abcdef123456": [
+                            "/media/videos/movie1.mp4",
+                            "/home/user/downloads/movie1.mp4"
+                        ],
+                        "789012ghijkl": [
+                            "/media/videos/show/episode1.mkv",
+                            "/media/videos/show/episode1_copy.mkv",
+                            "/home/user/downloads/episode1.mkv"
+                        ]
+                    };
+                    
+                    displayResults(duplicates);
+                    
+                    // Reset button state
+                    scanButton.disabled = false;
+                    scanButton.textContent = 'Start Scan';
+                }, 2000);
+            });
+            
+            function displayResults(duplicates) {
+                const duplicateGroups = Object.entries(duplicates);
+                
+                if (duplicateGroups.length === 0) {
+                    resultsContainer.innerHTML = `
+                        <div class="empty-state">
+                            <p>No duplicate videos found.</p>
+                        </div>
+                    `;
+                    return;
+                }
+                
+                let html = `
+                    <div class="stats">
+                        Found ${duplicateGroups.length} groups of duplicate files.
+                    </div>
+                `;
+                
+                duplicateGroups.forEach(([hash, files]) => {
+                    html += `
+                        <div class="duplicate-group">
+                            <div class="group-header">
+                                <span>${files.length} duplicate files</span>
+                                <span>${hash.substring(0, 8)}...</span>
+                            </div>
+                            <div class="group-content">
+                                ${files.map(file => {
+                                    const parts = file.split('/');
+                                    const filename = parts[parts.length - 1];
+                                    const directory = parts.slice(0, -1).join('/');
+                                    
+                                    return `
+                                        <div class="file-item">
+                                            <div class="file-name">${filename}</div>
+                                            <div class="file-path">${directory}</div>
+                                        </div>
+                                    `;
+                                }).join('')}
+                            </div>
+                        </div>
+                    `;
+                });
+                
+                resultsContainer.innerHTML = html;
+                
+                // Add event listeners for group expansion
+                document.querySelectorAll('.group-header').forEach(header => {
+                    header.addEventListener('click', function() {
+                        const group = this.closest('.duplicate-group');
+                        group.classList.toggle('expanded');
+                    });
+                });
+            }
+        });
+    </script>
+</body>
+</html> 
