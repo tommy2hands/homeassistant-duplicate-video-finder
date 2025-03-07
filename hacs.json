@@ -1,20 +1,5 @@
 {
   "name": "Duplicate Video Finder",
-  "render_readme": true,
-  "domains": ["duplicate_video_finder"],
-  "homeassistant": "2023.8.0",
-  "iot_standards": [],
-  "logotype": "duplicate_video_finder.png",
-  "filename": "duplicate_video_finder.zip",
-  "zip_release": true,
-  "hide_default_branch": false,
-  "topics": [
-    "duplicate",
-    "video",
-    "files",
-    "storage",
-    "media"
-  ],
   "version": "1.0.0",
   "url": "https://github.com/tommy2hands/homeassistant-duplicate-video-finder",
   "dependencies": [],
@@ -23,7 +8,8 @@
   "documentation": "https://github.com/tommy2hands/homeassistant-duplicate-video-finder",
   "issue_tracker": "https://github.com/tommy2hands/homeassistant-duplicate-video-finder/issues",
   "requirements": [],
-  "dependencies": [],
   "iot_standards": [],
-  "integration_type": "integration"
+  "integration_type": "integration",
+  "domains": ["duplicate_video_finder"],
+  "homeassistant": "2023.8.0"
 } 

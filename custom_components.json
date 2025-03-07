@@ -1,0 +1,29 @@
+{
+  "custom_components": {
+    "duplicate_video_finder": {
+      "version": "1.0.0",
+      "local": false,
+      "has_installer": true,
+      "updated_at": "2024-03-07T00:00:00.00Z",
+      "maintainer": "tommy2hands",
+      "documentation": "https://github.com/tommy2hands/homeassistant-duplicate-video-finder",
+      "dependencies": [],
+      "requirements": [],
+      "iot_standards": [],
+      "logotype": "duplicate_video_finder.png",
+      "domains": ["duplicate_video_finder"],
+      "homeassistant": "2023.8.0",
+      "render_readme": true,
+      "filename": "duplicate_video_finder.zip",
+      "zip_release": true,
+      "hide_default_branch": false,
+      "topics": [
+        "duplicate",
+        "video",
+        "files",
+        "storage",
+        "media"
+      ]
+    }
+  }
+} 
