@@ -1,0 +1,26 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Duplicate Video Finder",
+        "description": "Set up Duplicate Video Finder to find and manage duplicate video files."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Already configured. Only a single instance is allowed."
+    }
+  },
+  "title": "Duplicate Video Finder",
+  "services": {
+    "find_duplicates": {
+      "name": "Find Duplicates",
+      "description": "Scan for duplicate video files.",
+      "fields": {
+        "video_extensions": {
+          "name": "Video Extensions",
+          "description": "List of video file extensions to scan for."
+        }
+      }
+    }
+  }
+} 

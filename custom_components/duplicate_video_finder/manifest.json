@@ -2,12 +2,14 @@
   "domain": "duplicate_video_finder",
   "name": "Duplicate Video Finder",
   "documentation": "https://github.com/tommy2hands/homeassistant-duplicate-video-finder",
-  "dependencies": [],
+  "dependencies": ["frontend", "http"],
   "codeowners": ["@tommy2hands"],
   "requirements": [],
   "version": "1.0.0",
-  "config_flow": false,
+  "config_flow": true,
   "iot_class": "local_polling",
+  "diagnostics": true,
+  "integration_type": "service",
   "logotype": "duplicate_video_finder.png",
   "homeassistant": {
     "min_version": "2023.8.0"

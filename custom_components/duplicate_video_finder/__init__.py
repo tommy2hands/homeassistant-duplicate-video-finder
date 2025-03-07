@@ -9,12 +9,13 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.components.panel_custom import async_register_panel
+from homeassistant.loader import bind_hass
 
 from .const import DOMAIN
 from .services import async_setup_services
@@ -32,6 +33,38 @@ PANEL_URL = "/duplicate-video-finder"
 PANEL_TITLE = "Duplicate Videos"
 PANEL_ICON = "mdi:file-video"
 PANEL_NAME = "duplicate-video-finder"
+
+@callback
+@bind_hass
+def add_duplicate_video_finder_panel(hass: HomeAssistant) -> None:
+    """Add the Duplicate Video Finder panel to the sidebar."""
+    # Try all methods to register the panel
+    try:
+        # Method 1: Register as a custom panel
+        hass.components.frontend.async_register_built_in_panel(
+            "custom",
+            PANEL_TITLE,
+            PANEL_ICON,
+            PANEL_NAME,
+            require_admin=False,
+        )
+        _LOGGER.info("Panel registered as custom panel")
+    except Exception as err:
+        _LOGGER.error("Error registering custom panel: %s", err)
+
+    try:
+        # Method 2: Register as an iframe panel
+        hass.components.frontend.async_register_built_in_panel(
+            "iframe",
+            PANEL_TITLE,
+            PANEL_ICON,
+            PANEL_NAME,
+            {"url": "/local/duplicate_video_finder/duplicate-video-finder-panel.html"},
+            require_admin=False,
+        )
+        _LOGGER.info("Panel registered as iframe panel")
+    except Exception as err:
+        _LOGGER.error("Error registering iframe panel: %s", err)
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the Duplicate Video Finder integration."""
@@ -66,54 +99,19 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     except Exception as err:
         _LOGGER.error("Error copying frontend files: %s", err)
     
-    # Register the panel using multiple methods to ensure it works
-    
-    # Method 1: Register as a custom panel
-    try:
-        await async_register_panel(
-            hass,
-            webcomponent_name="duplicate-video-finder-panel",
-            frontend_url_path=PANEL_NAME,
-            sidebar_title=PANEL_TITLE,
-            sidebar_icon=PANEL_ICON,
-            module_url="/local/duplicate_video_finder/duplicate-video-finder-panel.js",
-            trust_external=True,
-            require_admin=False,
-        )
-        _LOGGER.info("Panel registered as custom panel")
-    except Exception as err:
-        _LOGGER.error("Error registering custom panel: %s", err)
-    
-    # Method 2: Register as an iframe panel
-    try:
-        hass.components.frontend.async_register_built_in_panel(
-            "iframe",
-            PANEL_TITLE,
-            PANEL_ICON,
-            PANEL_NAME,
-            {"url": "/local/duplicate_video_finder/duplicate-video-finder-panel.html"},
-            require_admin=False,
-        )
-        _LOGGER.info("Panel registered as iframe panel")
-    except Exception as err:
-        _LOGGER.error("Error registering iframe panel: %s", err)
-    
-    # Method 3: Add a direct sidebar item
-    try:
-        hass.http.register_view(DuplicateVideoFinderView(hass))
-        hass.components.frontend.async_register_built_in_panel(
-            "custom",
-            PANEL_TITLE,
-            PANEL_ICON,
-            PANEL_NAME,
-            require_admin=False,
-        )
-        _LOGGER.info("Panel registered as direct sidebar item")
-    except Exception as err:
-        _LOGGER.error("Error registering direct sidebar item: %s", err)
+    # Register the panel
+    add_duplicate_video_finder_panel(hass)
     
     # Set up services
     await async_setup_services(hass)
+    
+    # Create a config entry if one doesn't exist
+    if not hass.config_entries.async_entries(DOMAIN):
+        hass.async_create_task(
+            hass.config_entries.flow.async_init(
+                DOMAIN, context={"source": "import"}, data={}
+            )
+        )
     
     return True
 
@@ -144,6 +142,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Duplicate Video Finder from a config entry."""
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN]["config_entry"] = entry
+    
+    # Register the panel
+    add_duplicate_video_finder_panel(hass)
+    
+    # Set up services
+    await async_setup_services(hass)
     
     return True
 
