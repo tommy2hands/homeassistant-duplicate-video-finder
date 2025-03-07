@@ -25,4 +25,7 @@ DEFAULT_VIDEO_EXTENSIONS: Final = [
     ".webm",
 ]
 DEFAULT_MAX_CPU_PERCENT: Final = 70  # Default maximum CPU usage percentage
-DEFAULT_BATCH_SIZE: Final = 100  # Default number of files to process in a batch 
+DEFAULT_BATCH_SIZE: Final = 100  # Default number of files to process in a batch
+
+# Event names
+SCAN_STATE_UPDATED: Final = f"{DOMAIN}_scan_state_updated" 

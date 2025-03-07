@@ -12,9 +12,11 @@ customElements.define(
       this._progress = 0;
       this._currentFile = "";
       this._updateTimer = null;
+      this._eventListenersAttached = false;
     }
 
     set hass(hass) {
+      const oldHass = this._hass;
       this._hass = hass;
       
       // Check scan state
@@ -36,18 +38,57 @@ customElements.define(
         this._duplicates = hass.data.duplicate_video_finder.duplicates;
       }
       
-      this.render();
+      // Only re-render if something relevant has changed
+      const shouldUpdate = 
+        !oldHass || 
+        this._isScanning !== (oldHass.data?.duplicate_video_finder?.scan_state?.is_scanning || false) ||
+        this._isPaused !== (oldHass.data?.duplicate_video_finder?.scan_state?.is_paused || false) ||
+        Math.abs(this._progress - (oldHass.data?.duplicate_video_finder?.scan_state?.processed_files || 0) * 100) > 1 ||
+        this._currentFile !== (oldHass.data?.duplicate_video_finder?.scan_state?.current_file || "");
+      
+      if (shouldUpdate) {
+        this.render();
+      }
       
       // Set up polling for progress updates during scanning
-      if (this._isScanning && !this._updateTimer) {
-        this._updateTimer = setInterval(() => this.render(), 1000);
-      } else if (!this._isScanning && this._updateTimer) {
-        clearInterval(this._updateTimer);
-        this._updateTimer = null;
+      this._setupPolling();
+    }
+
+    connectedCallback() {
+      if (!this.shadowRoot.innerHTML) {
+        this.render();
       }
+      this._setupPolling();
     }
 
     disconnectedCallback() {
+      this._clearPolling();
+      this._removeEventListeners();
+    }
+    
+    _setupPolling() {
+      // Clear existing timer if any
+      this._clearPolling();
+      
+      // Set up new timer if scanning
+      if (this._isScanning && !this._updateTimer) {
+        this._updateTimer = setInterval(() => {
+          if (this._hass) {
+            // Fetch latest state
+            const scanState = this._hass.data?.duplicate_video_finder?.scan_state;
+            if (scanState) {
+              this._isScanning = scanState.is_scanning;
+              this._isPaused = scanState.is_paused;
+              this._progress = scanState.processed_files * 100;
+              this._currentFile = scanState.current_file;
+              this.render();
+            }
+          }
+        }, 1000);
+      }
+    }
+    
+    _clearPolling() {
       if (this._updateTimer) {
         clearInterval(this._updateTimer);
         this._updateTimer = null;
@@ -235,10 +276,31 @@ customElements.define(
           .col {
             flex: 1;
           }
+          .status-badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+            margin-left: 8px;
+          }
+          .status-badge.scanning {
+            background-color: #4caf50;
+            color: white;
+          }
+          .status-badge.paused {
+            background-color: #ff9800;
+            color: white;
+          }
         </style>
         <div class="card">
           <div class="card-header">
-            <h2>Duplicate Video Finder</h2>
+            <h2>
+              Duplicate Video Finder
+              ${this._isScanning ? 
+                `<span class="status-badge ${this._isPaused ? 'paused' : 'scanning'}">${this._isPaused ? 'Paused' : 'Scanning'}</span>` : 
+                ''}
+            </h2>
           </div>
           <div class="info-text">
             <p>This tool automatically scans all directories under <code>/home/*</code> for duplicate video files.</p>
@@ -256,19 +318,19 @@ customElements.define(
                 <div class="col">
                   <div class="form-group">
                     <label for="max-cpu">Max CPU Usage (%)</label>
-                    <input type="number" id="max-cpu" value="70" min="10" max="100">
+                    <input type="number" id="max-cpu" value="70" min="10" max="100" ${this._isScanning ? 'disabled' : ''}>
                   </div>
                 </div>
                 <div class="col">
                   <div class="form-group">
                     <label for="batch-size">Batch Size</label>
-                    <input type="number" id="batch-size" value="100" min="10" max="1000">
+                    <input type="number" id="batch-size" value="100" min="10" max="1000" ${this._isScanning ? 'disabled' : ''}>
                   </div>
                 </div>
               </div>
               <div class="form-group">
                 <label for="extensions">Video Extensions (comma separated)</label>
-                <input type="text" id="extensions" value=".mp4, .avi, .mkv, .mov, .wmv, .flv, .webm">
+                <input type="text" id="extensions" value=".mp4, .avi, .mkv, .mov, .wmv, .flv, .webm" ${this._isScanning ? 'disabled' : ''}>
               </div>
             </div>
           </div>
@@ -280,6 +342,7 @@ customElements.define(
       `;
 
       // Add event listeners
+      this._removeEventListeners();
       this._attachEventListeners();
     }
     
@@ -358,49 +421,102 @@ customElements.define(
         `).join('')}
       `;
     }
+    
+    _removeEventListeners() {
+      // Remove existing event listeners to prevent duplicates
+      if (this._eventListenersAttached) {
+        const scanButton = this.shadowRoot.querySelector("#scan-button");
+        if (scanButton) {
+          scanButton.removeEventListener("click", this._boundStartScan);
+        }
+        
+        const pauseButton = this.shadowRoot.querySelector("#pause-button");
+        if (pauseButton) {
+          pauseButton.removeEventListener("click", this._boundPauseScan);
+        }
+        
+        const resumeButton = this.shadowRoot.querySelector("#resume-button");
+        if (resumeButton) {
+          resumeButton.removeEventListener("click", this._boundResumeScan);
+        }
+        
+        const cancelButton = this.shadowRoot.querySelector("#cancel-button");
+        if (cancelButton) {
+          cancelButton.removeEventListener("click", this._boundCancelScan);
+        }
+        
+        const advancedToggle = this.shadowRoot.querySelector("#advanced-toggle");
+        if (advancedToggle) {
+          advancedToggle.removeEventListener("click", this._boundToggleAdvanced);
+        }
+        
+        const groupHeaders = this.shadowRoot.querySelectorAll('.group-header');
+        groupHeaders.forEach(header => {
+          header.removeEventListener('click', this._boundToggleGroup);
+        });
+        
+        this._eventListenersAttached = false;
+      }
+    }
 
     _attachEventListeners() {
+      // Create bound methods if they don't exist
+      if (!this._boundStartScan) {
+        this._boundStartScan = this._startScan.bind(this);
+        this._boundPauseScan = this._pauseScan.bind(this);
+        this._boundResumeScan = this._resumeScan.bind(this);
+        this._boundCancelScan = this._cancelScan.bind(this);
+        this._boundToggleAdvanced = this._toggleAdvanced.bind(this);
+        this._boundToggleGroup = this._toggleGroup.bind(this);
+      }
+      
       // Scan button
       const scanButton = this.shadowRoot.querySelector("#scan-button");
       if (scanButton) {
-        scanButton.addEventListener("click", () => this._startScan());
+        scanButton.addEventListener("click", this._boundStartScan);
       }
       
       // Pause button
       const pauseButton = this.shadowRoot.querySelector("#pause-button");
       if (pauseButton) {
-        pauseButton.addEventListener("click", () => this._pauseScan());
+        pauseButton.addEventListener("click", this._boundPauseScan);
       }
       
       // Resume button
       const resumeButton = this.shadowRoot.querySelector("#resume-button");
       if (resumeButton) {
-        resumeButton.addEventListener("click", () => this._resumeScan());
+        resumeButton.addEventListener("click", this._boundResumeScan);
       }
       
       // Cancel button
       const cancelButton = this.shadowRoot.querySelector("#cancel-button");
       if (cancelButton) {
-        cancelButton.addEventListener("click", () => this._cancelScan());
+        cancelButton.addEventListener("click", this._boundCancelScan);
       }
       
       // Advanced options toggle
       const advancedToggle = this.shadowRoot.querySelector("#advanced-toggle");
       if (advancedToggle) {
-        advancedToggle.addEventListener("click", () => {
-          const advancedOptions = this.shadowRoot.querySelector(".advanced-options");
-          advancedOptions.classList.toggle("expanded");
-        });
+        advancedToggle.addEventListener("click", this._boundToggleAdvanced);
       }
       
       // Add event listeners for group expansion
       const groupHeaders = this.shadowRoot.querySelectorAll('.group-header');
       groupHeaders.forEach(header => {
-        header.addEventListener('click', (e) => {
-          const group = e.currentTarget.closest('.duplicate-group');
-          group.classList.toggle('expanded');
-        });
+        header.addEventListener('click', this._boundToggleGroup);
       });
+      
+      this._eventListenersAttached = true;
+    }
+    
+    _toggleAdvanced(e) {
+      const advancedOptions = this.shadowRoot.querySelector(".advanced-options");
+      advancedOptions.classList.toggle("expanded");
+    }
+    
+    _toggleGroup(e) {
+      const group = e.currentTarget.closest('.duplicate-group');
+      group.classList.toggle('expanded');
     }
 
     _startScan() {
@@ -436,6 +552,9 @@ customElements.define(
         }
         this.render();
       });
+      
+      // Set up polling
+      this._setupPolling();
     }
     
     _pauseScan() {
@@ -445,7 +564,11 @@ customElements.define(
       this.render();
       
       // Call the service
-      this._hass.callService("duplicate_video_finder", "pause_scan", {});
+      this._hass.callService("duplicate_video_finder", "pause_scan", {}).catch(error => {
+        this._isPaused = false;
+        console.error("Error pausing scan:", error);
+        this.render();
+      });
     }
     
     _resumeScan() {
@@ -455,7 +578,11 @@ customElements.define(
       this.render();
       
       // Call the service
-      this._hass.callService("duplicate_video_finder", "resume_scan", {});
+      this._hass.callService("duplicate_video_finder", "resume_scan", {}).catch(error => {
+        this._isPaused = true;
+        console.error("Error resuming scan:", error);
+        this.render();
+      });
     }
     
     _cancelScan() {
@@ -463,7 +590,9 @@ customElements.define(
       
       if (confirm("Are you sure you want to cancel the scan?")) {
         // Call the service
-        this._hass.callService("duplicate_video_finder", "cancel_scan", {});
+        this._hass.callService("duplicate_video_finder", "cancel_scan", {}).catch(error => {
+          console.error("Error cancelling scan:", error);
+        });
       }
     }
   }

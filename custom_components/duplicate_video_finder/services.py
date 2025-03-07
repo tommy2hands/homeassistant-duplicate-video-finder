@@ -12,8 +12,9 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Set, Tuple, Optional
 
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.helpers.typing import ConfigType
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .const import (
     CONF_VIDEO_EXTENSIONS,
@@ -27,6 +28,7 @@ from .const import (
     CONF_BATCH_SIZE,
     DEFAULT_MAX_CPU_PERCENT,
     DEFAULT_BATCH_SIZE,
+    SCAN_STATE_UPDATED,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -84,6 +86,21 @@ scan_state = {
     "found_duplicates": {},
     "pause_event": asyncio.Event(),
 }
+
+@callback
+def update_scan_state(hass: HomeAssistant, **kwargs) -> None:
+    """Update scan state and notify listeners."""
+    # Update scan state with provided values
+    for key, value in kwargs.items():
+        if key in scan_state:
+            scan_state[key] = value
+    
+    # Store in hass.data for access by frontend
+    if DOMAIN in hass.data:
+        hass.data[DOMAIN]["scan_state"] = scan_state
+    
+    # Notify listeners
+    async_dispatcher_send(hass, SCAN_STATE_UPDATED)
 
 def calculate_file_hash(filepath: str, chunk_size: int = 8192) -> str:
     """Calculate SHA-256 hash of a file."""
@@ -155,7 +172,7 @@ def get_home_directories() -> List[str]:
     
     return home_dirs
 
-def find_video_files(directory: str, video_extensions: List[str]) -> List[str]:
+def find_video_files(directory: str, video_extensions: List[str], hass: Optional[HomeAssistant] = None) -> List[str]:
     """Find all video files in a directory and its subdirectories."""
     video_files = []
     
@@ -170,7 +187,13 @@ def find_video_files(directory: str, video_extensions: List[str]) -> List[str]:
                 # Wait until resumed
                 scan_state["pause_event"].clear()
                 scan_state["pause_time"] = time.time()
+                
+                # Update state for UI
+                if hass:
+                    hass.add_job(update_scan_state, hass, current_file=f"Paused at: {root}")
+                
                 scan_state["pause_event"].wait()
+                
                 # Calculate pause duration
                 if scan_state["pause_time"]:
                     scan_state["total_pause_time"] += time.time() - scan_state["pause_time"]
@@ -183,6 +206,10 @@ def find_video_files(directory: str, video_extensions: List[str]) -> List[str]:
                 if any(filename.lower().endswith(ext) for ext in video_extensions):
                     filepath = os.path.join(root, filename)
                     video_files.append(filepath)
+                    
+                    # Update current file for UI
+                    if hass and len(video_files) % 10 == 0:  # Update every 10 files to reduce overhead
+                        hass.add_job(update_scan_state, hass, current_file=filepath)
     except (PermissionError, OSError) as err:
         _LOGGER.warning("Error scanning directory %s: %s", directory, err)
     
@@ -202,6 +229,9 @@ async def hash_files_parallel(hass: HomeAssistant, files: List[str], batch_size:
         batch = files[i:i+batch_size]
         _LOGGER.info("Processing batch %d/%d (%d files)", i//batch_size + 1, (len(files) + batch_size - 1)//batch_size, len(batch))
         
+        # Update scan state
+        update_scan_state(hass, current_file=f"Processing batch {i//batch_size + 1}/{(len(files) + batch_size - 1)//batch_size}")
+        
         # Use a thread pool to hash files in parallel
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             # Create a list of future objects
@@ -217,6 +247,9 @@ async def hash_files_parallel(hass: HomeAssistant, files: List[str], batch_size:
                     file_hash = future.result()
                     if file_hash:  # Only add if hash was successful
                         file_hashes[filepath] = file_hash
+                        
+                        # Update scan state
+                        update_scan_state(hass, current_file=filepath)
                 except Exception as exc:
                     _LOGGER.error("Error processing file %s: %s", filepath, exc)
         
@@ -252,6 +285,9 @@ async def find_duplicate_videos(
     scan_state["max_cpu_percent"] = max_cpu_percent
     scan_state["batch_size"] = batch_size
     
+    # Update scan state in hass.data
+    update_scan_state(hass)
+    
     hash_dict: Dict[str, List[str]] = {}
     
     try:
@@ -260,7 +296,7 @@ async def find_duplicate_videos(
         
         if not home_dirs:
             _LOGGER.warning("No directories found under /home")
-            scan_state["is_scanning"] = False
+            update_scan_state(hass, is_scanning=False)
             return {}
         
         _LOGGER.info("Starting scan of %d home directories with max CPU %d%% and batch size %d", 
@@ -272,21 +308,24 @@ async def find_duplicate_videos(
             # Check if cancel was requested
             if scan_state["cancel_requested"]:
                 _LOGGER.info("Scan cancelled by user")
-                scan_state["is_scanning"] = False
+                update_scan_state(hass, is_scanning=False)
                 return {}
                 
+            update_scan_state(hass, current_file=f"Scanning directory: {directory}")
+            
             video_files = await hass.async_add_executor_job(
-                find_video_files, directory, video_extensions
+                find_video_files, directory, video_extensions, hass
             )
             all_video_files.extend(video_files)
         
         # Update total files count
         scan_state["total_files"] = len(all_video_files)
         _LOGGER.info("Found %d video files to analyze", scan_state["total_files"])
+        update_scan_state(hass, total_files=len(all_video_files))
         
         if scan_state["total_files"] == 0:
             _LOGGER.info("No video files found to analyze")
-            scan_state["is_scanning"] = False
+            update_scan_state(hass, is_scanning=False)
             return {}
         
         # Then, hash all files in parallel with batching
@@ -295,7 +334,7 @@ async def find_duplicate_videos(
         # Check if cancel was requested
         if scan_state["cancel_requested"]:
             _LOGGER.info("Scan cancelled by user")
-            scan_state["is_scanning"] = False
+            update_scan_state(hass, is_scanning=False)
             return {}
         
         # Group files by hash
@@ -320,11 +359,19 @@ async def find_duplicate_videos(
             len(duplicates)
         )
         
-        scan_state["is_scanning"] = False
+        # Update scan state
+        update_scan_state(
+            hass, 
+            is_scanning=False, 
+            processed_files=1.0,  # 100%
+            current_file="Scan complete",
+            found_duplicates=duplicates
+        )
+        
         return duplicates
     except Exception as err:
         _LOGGER.error("Error during scan: %s", err)
-        scan_state["is_scanning"] = False
+        update_scan_state(hass, is_scanning=False)
         return {}
 
 async def async_setup_services(hass: HomeAssistant) -> None:
@@ -333,6 +380,10 @@ async def async_setup_services(hass: HomeAssistant) -> None:
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN]["duplicates"] = {}
     hass.data[DOMAIN]["scan_state"] = scan_state
+    
+    # Initialize the pause event
+    scan_state["pause_event"] = asyncio.Event()
+    scan_state["pause_event"].set()  # Not paused initially
     
     async def handle_find_duplicates(call: ServiceCall) -> None:
         """Handle the find_duplicates service call."""
@@ -346,17 +397,11 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         batch_size = call.data.get(CONF_BATCH_SIZE, DEFAULT_BATCH_SIZE)
         
         _LOGGER.info("Starting duplicate video scan in /home directories")
-        duplicates = await find_duplicate_videos(hass, video_exts, max_cpu_percent, batch_size)
         
-        # Store the results in hass.data for the frontend to access
-        hass.data[DOMAIN]["duplicates"] = duplicates
-        
-        # Log the results
-        _LOGGER.info("Found %d groups of duplicate files", len(duplicates))
-        for file_hash, file_list in duplicates.items():
-            _LOGGER.info("Found duplicate files with hash %s:", file_hash)
-            for filepath in file_list:
-                _LOGGER.info("  - %s", filepath)
+        # Run the scan in a background task to avoid blocking
+        hass.async_create_task(
+            find_duplicate_videos(hass, video_exts, max_cpu_percent, batch_size)
+        )
     
     async def handle_pause_scan(call: ServiceCall) -> None:
         """Handle the pause_scan service call."""
@@ -371,6 +416,10 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         _LOGGER.info("Pausing scan")
         scan_state["is_paused"] = True
         scan_state["pause_time"] = time.time()
+        scan_state["pause_event"].clear()
+        
+        # Update scan state
+        update_scan_state(hass, is_paused=True)
     
     async def handle_resume_scan(call: ServiceCall) -> None:
         """Handle the resume_scan service call."""
@@ -392,6 +441,9 @@ async def async_setup_services(hass: HomeAssistant) -> None:
             
         # Set the event to resume processing
         scan_state["pause_event"].set()
+        
+        # Update scan state
+        update_scan_state(hass, is_paused=False)
     
     async def handle_cancel_scan(call: ServiceCall) -> None:
         """Handle the cancel_scan service call."""
@@ -406,6 +458,9 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         if scan_state["is_paused"]:
             scan_state["is_paused"] = False
             scan_state["pause_event"].set()
+            
+        # Update scan state
+        update_scan_state(hass, cancel_requested=True)
     
     # Register services
     hass.services.async_register(
