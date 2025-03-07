@@ -1,0 +1,5 @@
+default_config:
+
+# Add HACS integration
+hacs:
+  token: YOUR_GITHUB_TOKEN 
