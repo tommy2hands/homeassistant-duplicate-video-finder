@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 from typing import Any
 
 import voluptuous as vol
@@ -31,44 +32,66 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN]["duplicates"] = {}
     
-    # Register the panel
-    async_register_built_in_panel(
-        hass,
-        component_name="custom",
-        sidebar_title="Duplicate Videos",
-        sidebar_icon="mdi:file-video",
-        frontend_url_path="duplicate-video-finder",
-        require_admin=False,
-        config={
-            "_panel_custom": {
-                "name": "duplicate-video-finder-panel",
-                "module_url": "/local/duplicate_video_finder/duplicate-video-finder-panel.js",
-                "embed_iframe": False,
-            }
-        },
-    )
-    
     # Create local directory for frontend files
     local_dir = hass.config.path("www", "duplicate_video_finder")
     if not os.path.exists(local_dir):
         os.makedirs(local_dir)
     
-    # Copy frontend file to www directory
-    frontend_source = os.path.join(
-        os.path.dirname(__file__), "frontend", "duplicate-video-finder-panel.js"
-    )
-    frontend_dest = os.path.join(local_dir, "duplicate-video-finder-panel.js")
-    
+    # Copy frontend files to www directory
     try:
-        with open(frontend_source, "r") as source_file:
-            content = source_file.read()
-            
-        with open(frontend_dest, "w") as dest_file:
-            dest_file.write(content)
-            
-        _LOGGER.info("Frontend file copied to %s", frontend_dest)
+        # Copy HTML file
+        html_source = os.path.join(
+            os.path.dirname(__file__), "frontend", "duplicate-video-finder-panel.html"
+        )
+        html_dest = os.path.join(local_dir, "duplicate-video-finder-panel.html")
+        
+        # Copy JS file
+        js_source = os.path.join(
+            os.path.dirname(__file__), "frontend", "duplicate-video-finder-panel.js"
+        )
+        js_dest = os.path.join(local_dir, "duplicate-video-finder-panel.js")
+        
+        # Copy files
+        await hass.async_add_executor_job(shutil.copy2, html_source, html_dest)
+        await hass.async_add_executor_job(shutil.copy2, js_source, js_dest)
+        
+        _LOGGER.info("Frontend files copied to %s", local_dir)
     except Exception as err:
-        _LOGGER.error("Error copying frontend file: %s", err)
+        _LOGGER.error("Error copying frontend files: %s", err)
+    
+    # Register the panel
+    try:
+        hass.components.frontend.async_register_built_in_panel(
+            "iframe",
+            "Duplicate Videos",
+            "mdi:file-video",
+            "duplicate-video-finder",
+            {"url": "/local/duplicate_video_finder/duplicate-video-finder-panel.html"},
+            require_admin=False,
+        )
+        _LOGGER.info("Panel registered successfully")
+    except Exception as err:
+        _LOGGER.error("Error registering panel: %s", err)
+        
+        # Try alternative registration method
+        try:
+            hass.components.frontend.async_register_built_in_panel(
+                "custom",
+                "Duplicate Videos",
+                "mdi:file-video",
+                "duplicate-video-finder",
+                {
+                    "_panel_custom": {
+                        "name": "duplicate-video-finder-panel",
+                        "module_url": "/local/duplicate_video_finder/duplicate-video-finder-panel.js",
+                        "embed_iframe": False,
+                    }
+                },
+                require_admin=False,
+            )
+            _LOGGER.info("Panel registered using alternative method")
+        except Exception as err2:
+            _LOGGER.error("Error registering panel with alternative method: %s", err2)
     
     # Set up services
     await async_setup_services(hass)
