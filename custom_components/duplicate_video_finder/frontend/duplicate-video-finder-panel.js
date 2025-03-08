@@ -10,7 +10,7 @@ customElements.define(
       this._config = {};
       this._updateTimer = null;
       this._eventListenersAttached = false;
-      this._version = "1.1.7";
+      this._version = "1.1.8";
       
       // State properties with defaults
       this._isScanning = false;
@@ -60,7 +60,7 @@ customElements.define(
         return;
       }
 
-      // Try to get state from various possible entities
+      // Try to get state from sensor entity 
       const scanState = 
         hass.states['sensor.duplicate_video_finder_scan_state'] ||
         hass.states['sensor.duplicate_video_finder'];
@@ -75,6 +75,17 @@ customElements.define(
         }
         
         const attributes = scanState.attributes || {};
+        
+        // Skip unavailable entities
+        if (scanState.state === 'unavailable') {
+          if (this._debugMode) {
+            console.log("Entity is unavailable, waiting for state initialization");
+          }
+          // Don't clear scanning state if we initiated a scan
+          if (this._scanStarted) {
+            return;
+          }
+        }
         
         // Update scan state properties based on the sensor state
         this._isScanning = scanState.state === 'scanning';
@@ -96,7 +107,7 @@ customElements.define(
         }
         
         // If we were scanning but now we're not, clear polling
-        if (this._scanStarted && !this._isScanning) {
+        if (this._scanStarted && !this._isScanning && scanState.state !== 'unavailable') {
           this._scanStarted = false;
           if (this._debugMode) {
             console.log("Scan completed, clearing polling");
@@ -108,16 +119,14 @@ customElements.define(
       }
       
       // If we have a scan in progress but no entity yet, keep the UI in scanning state
-      if (this._scanStarted && !scanState) {
+      if (this._scanStarted && (!scanState || scanState.state === 'unavailable')) {
         // Calculate elapsed time
         const elapsed = (Date.now() - this._startTime) / 1000;
         
-        if (elapsed > 30) {
+        if (elapsed > 30 && elapsed <= 120) {
           this._currentFile = `Waiting for scan to start... (${Math.floor(elapsed)}s)`;
-        }
-        
-        // If more than 2 minutes without any entity, probably failed
-        if (elapsed > 120) {
+        } else if (elapsed > 120) {
+          // Only after 2 minutes we consider it failed
           this._isScanning = false;
           this._scanStarted = false;
           this._currentFile = "Scan failed to start properly. Please check Home Assistant logs.";

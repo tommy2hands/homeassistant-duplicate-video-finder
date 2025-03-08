@@ -99,17 +99,29 @@ def update_scan_state(hass: HomeAssistant, **kwargs) -> None:
     if DOMAIN in hass.data:
         hass.data[DOMAIN]["scan_state"] = scan_state
     
+    # Log for debugging
+    _LOGGER.debug("Scan state updated: %s", {k: v for k, v in scan_state.items() 
+                                            if k != 'found_duplicates'})
+    
     # Notify listeners
     async_dispatcher_send(hass, SCAN_STATE_UPDATED)
     
-    # Log for debugging
-    _LOGGER.debug("Scan state updated: %s", scan_state)
-    
-    # Force update of the sensor entity
+    # If this entity ID is directly in hass data, make sure we're writing its state
     if DOMAIN in hass.data and "entities" in hass.data[DOMAIN]:
         for entity_id in hass.data[DOMAIN]["entities"]:
-            if entity_id.startswith("sensor."):
-                async_dispatcher_send(hass, f"{DOMAIN}_{entity_id}_updated")
+            _LOGGER.debug("Notifying entity of state change: %s", entity_id)
+            state_obj = hass.states.get(entity_id)
+            if state_obj and state_obj.state == "unavailable":
+                _LOGGER.warning("Entity %s is unavailable, forcing state update", entity_id)
+                # Try to directly manipulate the state
+                hass.states.async_set(entity_id, 
+                    "scanning" if scan_state.get("is_scanning", False) else "idle",
+                    {
+                        "progress": 0,
+                        "current_file": scan_state.get("current_file", ""),
+                        "friendly_name": "Scan State"
+                    }
+                )
 
 def calculate_file_hash(filepath: str, chunk_size: int = 8192) -> str:
     """Calculate SHA-256 hash of a file."""
