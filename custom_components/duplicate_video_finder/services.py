@@ -72,7 +72,7 @@ EXCLUDED_DIRS: Set[str] = {
 # Maximum number of worker threads for file hashing
 MAX_WORKERS = 4
 
-# Global scan state
+# Initialize the scan state once
 scan_state = {
     "is_scanning": False,
     "is_paused": False,
@@ -84,7 +84,7 @@ scan_state = {
     "pause_time": None,
     "total_pause_time": 0,
     "found_duplicates": {},
-    "pause_event": asyncio.Event(),
+    "pause_event": None,  # Will be initialized in async_setup_services
 }
 
 @callback
@@ -101,6 +101,15 @@ def update_scan_state(hass: HomeAssistant, **kwargs) -> None:
     
     # Notify listeners
     async_dispatcher_send(hass, SCAN_STATE_UPDATED)
+    
+    # Log for debugging
+    _LOGGER.debug("Scan state updated: %s", scan_state)
+    
+    # Force update of the sensor entity
+    if DOMAIN in hass.data and "entities" in hass.data[DOMAIN]:
+        for entity_id in hass.data[DOMAIN]["entities"]:
+            if entity_id.startswith("sensor."):
+                async_dispatcher_send(hass, f"{DOMAIN}_{entity_id}_updated")
 
 def calculate_file_hash(filepath: str, chunk_size: int = 8192) -> str:
     """Calculate SHA-256 hash of a file."""
@@ -380,10 +389,14 @@ async def async_setup_services(hass: HomeAssistant) -> None:
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN]["duplicates"] = {}
     hass.data[DOMAIN]["scan_state"] = scan_state
+    hass.data[DOMAIN].setdefault("entities", [])
     
     # Initialize the pause event
     scan_state["pause_event"] = asyncio.Event()
     scan_state["pause_event"].set()  # Not paused initially
+    
+    # Make sure the initial scan state is propagated
+    update_scan_state(hass)
     
     async def handle_find_duplicates(call: ServiceCall) -> None:
         """Handle the find_duplicates service call."""
@@ -395,6 +408,20 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         video_exts = call.data.get(CONF_VIDEO_EXTENSIONS, DEFAULT_VIDEO_EXTENSIONS)
         max_cpu_percent = call.data.get(CONF_MAX_CPU_PERCENT, DEFAULT_MAX_CPU_PERCENT)
         batch_size = call.data.get(CONF_BATCH_SIZE, DEFAULT_BATCH_SIZE)
+        
+        # Reset scan state
+        scan_state["is_scanning"] = True
+        scan_state["is_paused"] = False
+        scan_state["cancel_requested"] = False
+        scan_state["current_file"] = "Initializing scan..."
+        scan_state["processed_files"] = 0
+        scan_state["total_files"] = 0
+        scan_state["start_time"] = time.time()
+        scan_state["pause_time"] = None
+        scan_state["total_pause_time"] = 0
+        
+        # Update state immediately
+        update_scan_state(hass)
         
         _LOGGER.info("Starting duplicate video scan in /home directories")
         
@@ -462,27 +489,24 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         # Update scan state
         update_scan_state(hass, cancel_requested=True)
     
-    # Register services
+    # Register all services
     hass.services.async_register(
-        DOMAIN,
-        SERVICE_FIND_DUPLICATES,
-        handle_find_duplicates,
+        DOMAIN, SERVICE_FIND_DUPLICATES, handle_find_duplicates
     )
     
     hass.services.async_register(
-        DOMAIN,
-        SERVICE_PAUSE_SCAN,
-        handle_pause_scan,
+        DOMAIN, SERVICE_PAUSE_SCAN, handle_pause_scan
     )
     
     hass.services.async_register(
-        DOMAIN,
-        SERVICE_RESUME_SCAN,
-        handle_resume_scan,
+        DOMAIN, SERVICE_RESUME_SCAN, handle_resume_scan
     )
     
     hass.services.async_register(
-        DOMAIN,
-        SERVICE_CANCEL_SCAN,
-        handle_cancel_scan,
-    ) 
+        DOMAIN, SERVICE_CANCEL_SCAN, handle_cancel_scan
+    )
+    
+    # Log all the registered services for debugging
+    _LOGGER.info("Registered services: %s", hass.services.async_services().get(DOMAIN, {}))
+    
+    return True 

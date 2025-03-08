@@ -15,6 +15,7 @@ from homeassistant.helpers.typing import ConfigType
 from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.loader import bind_hass
+from homeassistant.const import Platform
 
 from .const import DOMAIN
 from .services import async_setup_services
@@ -28,6 +29,8 @@ CONFIG_SCHEMA = vol.Schema(
     extra=vol.ALLOW_EXTRA,
 )
 
+PLATFORMS = [Platform.SENSOR]
+
 PANEL_URL = "/duplicate-video-finder"
 PANEL_TITLE = "Duplicate Videos"
 PANEL_ICON = "mdi:file-video"
@@ -38,6 +41,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # Initialize component data
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN]["duplicates"] = {}
+    hass.data[DOMAIN]["entities"] = []
     
     # Create local directory for frontend files
     local_dir = hass.config.path("www", "duplicate_video_finder")
@@ -96,10 +100,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN]["config_entry"] = entry
     
+    # Forward the setup to the sensor platform
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    
     return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
+    # Unload sensor platform
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    
     # Remove services
     for service in hass.services.async_services().get(DOMAIN, {}):
         hass.services.async_remove(DOMAIN, service)
@@ -108,4 +118,4 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if DOMAIN in hass.data:
         hass.data.pop(DOMAIN)
     
-    return True 
+    return unload_ok 
