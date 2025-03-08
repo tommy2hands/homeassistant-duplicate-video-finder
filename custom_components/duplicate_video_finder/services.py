@@ -277,110 +277,191 @@ async def find_duplicate_videos(
     max_cpu_percent: int = DEFAULT_MAX_CPU_PERCENT,
     batch_size: int = DEFAULT_BATCH_SIZE,
 ) -> Dict[str, List[str]]:
-    """Find duplicate video files in all home directories."""
-    # Initialize scan state
+    """Find duplicate videos in home directories based on content.
+    
+    This function scans for video files with the specified extensions,
+    calculates their hashes, and returns groups of duplicate files.
+    """
+    # Reset scan state
     scan_state["is_scanning"] = True
     scan_state["is_paused"] = False
     scan_state["cancel_requested"] = False
-    scan_state["current_file"] = ""
-    scan_state["total_files"] = 0
-    scan_state["processed_files"] = 0
+    scan_state["current_file"] = "Starting scan..."
     scan_state["start_time"] = time.time()
     scan_state["pause_time"] = None
     scan_state["total_pause_time"] = 0
+    scan_state["total_files"] = 0
+    scan_state["processed_files"] = 0
     scan_state["found_duplicates"] = {}
-    scan_state["pause_event"] = asyncio.Event()
-    scan_state["pause_event"].set()  # Not paused initially
-    scan_state["max_cpu_percent"] = max_cpu_percent
-    scan_state["batch_size"] = batch_size
     
-    # Update scan state in hass.data
+    # Initial update
     update_scan_state(hass)
     
-    hash_dict: Dict[str, List[str]] = {}
+    # Ensure pause event is ready
+    if scan_state["pause_event"] is None:
+        scan_state["pause_event"] = asyncio.Event()
+        scan_state["pause_event"].set()
+    
+    _LOGGER.info("Starting duplicate video scan")
     
     try:
-        # Get all directories under /home
-        home_dirs = get_home_directories()
+        # Find video files in home directories
+        all_videos = []
+        home_dirs = await hass.async_add_executor_job(get_home_directories)
         
-        if not home_dirs:
-            _LOGGER.warning("No directories found under /home")
-            update_scan_state(hass, is_scanning=False)
-            return {}
-        
-        _LOGGER.info("Starting scan of %d home directories with max CPU %d%% and batch size %d", 
-                    len(home_dirs), max_cpu_percent, batch_size)
-        
-        # First, find all video files
-        all_video_files = []
-        for directory in home_dirs:
-            # Check if cancel was requested
-            if scan_state["cancel_requested"]:
-                _LOGGER.info("Scan cancelled by user")
-                update_scan_state(hass, is_scanning=False)
-                return {}
-                
-            update_scan_state(hass, current_file=f"Scanning directory: {directory}")
+        for home_dir in home_dirs:
+            _LOGGER.info("Scanning directory: %s", home_dir)
             
-            video_files = await hass.async_add_executor_job(
-                find_video_files, directory, video_extensions, hass
+            # Check if scan was cancelled
+            if scan_state["cancel_requested"]:
+                _LOGGER.info("Scan cancelled")
+                break
+                
+            # Wait if paused
+            await scan_state["pause_event"].wait()
+            
+            # Find video files
+            videos = await hass.async_add_executor_job(
+                find_video_files, home_dir, video_extensions, hass
             )
-            all_video_files.extend(video_files)
-        
-        # Update total files count
-        scan_state["total_files"] = len(all_video_files)
-        _LOGGER.info("Found %d video files to analyze", scan_state["total_files"])
-        update_scan_state(hass, total_files=len(all_video_files))
-        
-        if scan_state["total_files"] == 0:
-            _LOGGER.info("No video files found to analyze")
-            update_scan_state(hass, is_scanning=False)
-            return {}
-        
-        # Then, hash all files in parallel with batching
-        file_hashes = await hash_files_parallel(hass, all_video_files, batch_size)
-        
-        # Check if cancel was requested
+            
+            all_videos.extend(videos)
+            
+            # Update total file count
+            scan_state["total_files"] = len(all_videos)
+            update_scan_state(hass, total_files=len(all_videos))
+            
+        # Check if scan was cancelled
         if scan_state["cancel_requested"]:
-            _LOGGER.info("Scan cancelled by user")
+            scan_state["is_scanning"] = False
             update_scan_state(hass, is_scanning=False)
             return {}
+            
+        # Calculate file hashes and find duplicates
+        _LOGGER.info("Found %d video files, hashing files...", len(all_videos))
         
-        # Group files by hash
-        for filepath, file_hash in file_hashes.items():
-            if file_hash in hash_dict:
-                hash_dict[file_hash].append(filepath)
-            else:
-                hash_dict[file_hash] = [filepath]
+        # Update the scan state
+        scan_state["total_files"] = len(all_videos)
+        update_scan_state(hass, total_files=len(all_videos))
         
-        # Filter out unique files
-        duplicates = {k: v for k, v in hash_dict.items() if len(v) > 1}
+        # Hash the files in parallel with CPU limitation
+        file_hashes = {}
+        duplicates = {}
         
-        # Store duplicates in scan state
-        scan_state["found_duplicates"] = duplicates
+        # Process files in batches
+        total_batches = (len(all_videos) + batch_size - 1) // batch_size
         
-        # Calculate elapsed time excluding pauses
-        elapsed_time = time.time() - scan_state["start_time"] - scan_state["total_pause_time"]
-        _LOGGER.info(
-            "Scan completed in %.2f seconds (%.2f seconds including pauses). Found %d groups of duplicate files",
-            elapsed_time,
-            time.time() - scan_state["start_time"],
-            len(duplicates)
-        )
+        for batch_idx in range(total_batches):
+            # Check if scan was cancelled
+            if scan_state["cancel_requested"]:
+                _LOGGER.info("Scan cancelled during processing")
+                break
+                
+            # Wait if paused
+            await scan_state["pause_event"].wait()
+            
+            # Get the current batch
+            start_idx = batch_idx * batch_size
+            end_idx = min(start_idx + batch_size, len(all_videos))
+            current_batch = all_videos[start_idx:end_idx]
+            
+            # Hash the batch of files
+            _LOGGER.debug("Processing batch %d/%d (%d files)", 
+                         batch_idx + 1, total_batches, len(current_batch))
+            
+            batch_start_time = time.time()
+            
+            # Process each file in the batch
+            for i, file_path in enumerate(current_batch):
+                # Check if scan was cancelled
+                if scan_state["cancel_requested"]:
+                    break
+                    
+                # Wait if paused
+                await scan_state["pause_event"].wait()
+                
+                # Limit CPU usage
+                while psutil.cpu_percent(interval=0.1) > max_cpu_percent:
+                    if scan_state["cancel_requested"]:
+                        break
+                    await asyncio.sleep(0.5)
+                
+                # Update current file
+                scan_state["current_file"] = file_path
+                scan_state["processed_files"] = start_idx + i
+                
+                # Update at regular intervals to avoid too many updates
+                if i % 5 == 0 or i == len(current_batch) - 1:
+                    update_scan_state(
+                        hass, 
+                        current_file=file_path,
+                        processed_files=start_idx + i
+                    )
+                
+                # Calculate hash
+                try:
+                    file_hash = await hass.async_add_executor_job(calculate_file_hash, file_path)
+                    file_hashes[file_path] = file_hash
+                    
+                    # Check for duplicates
+                    if file_hash in duplicates:
+                        duplicates[file_hash].append({
+                            "path": file_path,
+                            "size": os.path.getsize(file_path),
+                            "created": os.path.getctime(file_path)
+                        })
+                    else:
+                        duplicates[file_hash] = [{
+                            "path": file_path,
+                            "size": os.path.getsize(file_path),
+                            "created": os.path.getctime(file_path)
+                        }]
+                except Exception as err:
+                    _LOGGER.error("Error hashing file %s: %s", file_path, err)
+            
+            # Update processed files after batch
+            scan_state["processed_files"] = end_idx
+            update_scan_state(hass, processed_files=end_idx)
+            
+            batch_duration = time.time() - batch_start_time
+            _LOGGER.debug("Batch %d/%d completed in %.2f seconds", 
+                         batch_idx + 1, total_batches, batch_duration)
+            
+            # Update found duplicates every batch
+            filtered_duplicates = {k: v for k, v in duplicates.items() if len(v) > 1}
+            scan_state["found_duplicates"] = filtered_duplicates
+            update_scan_state(hass, found_duplicates=filtered_duplicates)
         
-        # Update scan state
+        # Filter to only include actual duplicates (more than 1 file with same hash)
+        result_duplicates = {k: v for k, v in duplicates.items() if len(v) > 1}
+        
+        # Final update
+        scan_state["is_scanning"] = False
+        scan_state["current_file"] = ""
+        scan_state["found_duplicates"] = result_duplicates
         update_scan_state(
-            hass, 
-            is_scanning=False, 
-            processed_files=1.0,  # 100%
-            current_file="Scan complete",
-            found_duplicates=duplicates
+            hass,
+            is_scanning=False,
+            current_file="",
+            found_duplicates=result_duplicates
         )
         
-        return duplicates
+        _LOGGER.info("Scan completed, found %d groups of duplicates", len(result_duplicates))
+        
+        return result_duplicates
+        
     except Exception as err:
         _LOGGER.error("Error during scan: %s", err)
-        update_scan_state(hass, is_scanning=False)
+        
+        # Reset scan state on error
+        scan_state["is_scanning"] = False
+        scan_state["current_file"] = f"Error: {str(err)}"
+        update_scan_state(
+            hass,
+            is_scanning=False,
+            current_file=f"Error: {str(err)}"
+        )
+        
         return {}
 
 async def async_setup_services(hass: HomeAssistant) -> None:

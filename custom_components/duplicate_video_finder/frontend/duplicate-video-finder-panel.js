@@ -62,92 +62,66 @@ customElements.define(
 
       // Try to get state from various possible entities
       const scanState = 
-        hass.states['duplicate_video_finder.scan_state'] ||
         hass.states['sensor.duplicate_video_finder_scan_state'] ||
         hass.states['sensor.duplicate_video_finder'];
       
-      // If we have a scan state entity, update from it
+      if (this._debugMode) {
+        console.log("Checking scan state entity:", scanState);
+      }
+      
       if (scanState) {
-        const attributes = scanState.attributes || {};
-        
-        // Debug logging
         if (this._debugMode) {
           console.log("Found scan state entity:", scanState.entity_id, scanState);
         }
         
-        // Update scan state properties
-        const wasScanning = this._isScanning;
-        this._isScanning = scanState.state === 'scanning' || scanState.state === 'on';
+        const attributes = scanState.attributes || {};
+        
+        // Update scan state properties based on the sensor state
+        this._isScanning = scanState.state === 'scanning';
         this._isPaused = scanState.state === 'paused';
         
-        // Look for progress in various possible attribute names
+        // Get progress from attributes
         if (attributes.progress !== undefined) {
           this._progress = parseFloat(attributes.progress || 0);
-        } else if (attributes.scan_progress !== undefined) {
-          this._progress = parseFloat(attributes.scan_progress || 0);
-        } else if (attributes.processed_percentage !== undefined) {
-          this._progress = parseFloat(attributes.processed_percentage || 0);
         }
         
-        // Look for current file in various possible attribute names
+        // Get current file from attributes
         if (attributes.current_file) {
           this._currentFile = attributes.current_file;
-        } else if (attributes.file) {
-          this._currentFile = attributes.file;
-        } else if (attributes.processing_file) {
-          this._currentFile = attributes.processing_file;
         }
         
         // Update duplicates if available
         if (attributes.found_duplicates) {
           this._duplicates = attributes.found_duplicates;
-        } else if (attributes.duplicates) {
-          this._duplicates = attributes.duplicates;
         }
         
-        // If scan finished, clear polling
-        if (wasScanning && !this._isScanning) {
+        // If we were scanning but now we're not, clear polling
+        if (this._scanStarted && !this._isScanning) {
+          this._scanStarted = false;
+          if (this._debugMode) {
+            console.log("Scan completed, clearing polling");
+          }
           this._clearPolling();
         }
-      } else {
-        // Check for scan in progress but no entity yet
-        if (this._scanStarted && this._startTime) {
-          // Calculate elapsed time since scan started
-          const elapsed = (Date.now() - this._startTime) / 1000;
-          
-          // If more than 30 seconds have passed without an entity appearing,
-          // something might be wrong with the backend
-          if (elapsed > 30 && this._pollCount > 15) {
-            // Show a warning but don't cancel yet
-            this._currentFile = `Waiting for backend response (${Math.floor(elapsed)}s)...`;
-            
-            // If more than 2 minutes, probably failed
-            if (elapsed > 120) {
-              this._isScanning = false;
-              this._scanStarted = false;
-              this._currentFile = "Scan failed to start properly. Please try again.";
-              this._clearPolling();
-            }
-          }
-        }
+      } else if (this._debugMode) {
+        console.log("No scan state entity found");
       }
       
-      // Check for duplicates in other potential entities if not found yet
-      if (!this._duplicates) {
-        const dupsEntity = 
-          hass.states['sensor.duplicate_video_finder_duplicates'] ||
-          hass.states['duplicate_video_finder.duplicates'];
+      // If we have a scan in progress but no entity yet, keep the UI in scanning state
+      if (this._scanStarted && !scanState) {
+        // Calculate elapsed time
+        const elapsed = (Date.now() - this._startTime) / 1000;
         
-        if (dupsEntity && dupsEntity.attributes) {
-          const attrs = dupsEntity.attributes;
-          if (attrs.duplicates) {
-            this._duplicates = attrs.duplicates;
-          } else if (attrs.found_duplicates) {
-            this._duplicates = attrs.found_duplicates;
-          } else if (typeof attrs === 'object' && Object.keys(attrs).length > 0) {
-            // Last resort: try to use the attributes directly
-            this._duplicates = attrs;
-          }
+        if (elapsed > 30) {
+          this._currentFile = `Waiting for scan to start... (${Math.floor(elapsed)}s)`;
+        }
+        
+        // If more than 2 minutes without any entity, probably failed
+        if (elapsed > 120) {
+          this._isScanning = false;
+          this._scanStarted = false;
+          this._currentFile = "Scan failed to start properly. Please check Home Assistant logs.";
+          this._clearPolling();
         }
       }
     }
@@ -289,74 +263,15 @@ customElements.define(
                 isPaused: this._isPaused,
                 progress: this._progress,
                 currentFile: this._currentFile,
-                scanStarted: this._scanStarted
+                scanStarted: this._scanStarted,
+                entities: Object.keys(this._hass.states)
+                  .filter(id => id.includes('duplicate_video_finder'))
               });
             }
-          
-            // Check for the scan state directly from the hass object
-            const scanState = 
-              this._hass.states['duplicate_video_finder.scan_state'] || 
-              this._hass.states['sensor.duplicate_video_finder_scan_state'] ||
-              this._hass.states['sensor.duplicate_video_finder'];
-              
-            if (scanState) {
-              this._updateScanState(this._hass);
-              this.render();
-            } else {
-              // If we can't find the entity, try using the API
-              this._hass.callApi('GET', 'states')
-                .then(states => {
-                  // Find any entity related to duplicate video finder
-                  const scanStateEntity = states.find(state => 
-                    state.entity_id.includes('duplicate_video_finder') || 
-                    (state.entity_id.includes('sensor') && state.entity_id.includes('duplicate'))
-                  );
-                  
-                  if (scanStateEntity) {
-                    if (this._debugMode) {
-                      console.log("Found entity via API:", scanStateEntity);
-                    }
-                    
-                    // Create a temporary hass object with the scan state
-                    const tempHass = {
-                      states: {
-                        [scanStateEntity.entity_id]: scanStateEntity
-                      }
-                    };
-                    
-                    // Update state and render
-                    this._updateScanState(tempHass);
-                    this.render();
-                  } else if (this._debugMode) {
-                    console.log("No entity found in states:", states.map(s => s.entity_id));
-                  }
-                })
-                .catch(error => {
-                  console.error("Error polling states:", error);
-                });
-              
-              // If it's been more than 5 seconds and no progress, try pinging the service
-              if (this._scanStarted && Date.now() - this._startTime > 5000 && this._progress === 0) {
-                // Only ping if we haven't recently
-                const now = Date.now();
-                if (!this._lastServiceCall || now - this._lastServiceCall > 10000) {
-                  this._lastServiceCall = now;
-                  
-                  // Ping the status
-                  this._hass.callService('duplicate_video_finder', 'get_status', {})
-                    .catch(error => {
-                      if (this._debugMode) {
-                        console.error("Error pinging status:", error);
-                      }
-                    });
-                }
-              }
-            }
             
-            // Update elapsed time in UI if scan is in progress
-            if (this._scanStarted && this._startTime) {
-              this.render();
-            }
+            // Update state and render
+            this._updateScanState(this._hass);
+            this.render();
           }
         }, 1000);
       }
@@ -793,6 +708,9 @@ customElements.define(
         });
       }
       
+      // Set up polling before service call
+      this._setupPolling();
+      
       // Call the service
       this._lastServiceCall = Date.now();
       this._hass.callService('duplicate_video_finder', 'find_duplicates', {
@@ -805,9 +723,6 @@ customElements.define(
         if (this._debugMode) {
           console.log("Service call successful");
         }
-        
-        // Set up polling for updates
-        this._setupPolling();
       })
       .catch(error => {
         // Reset UI on error
