@@ -10,7 +10,7 @@ customElements.define(
       this._config = {};
       this._updateTimer = null;
       this._eventListenersAttached = false;
-      this._version = "1.1.4";
+      this._version = "1.1.5";
       
       // State properties with defaults
       this._isScanning = false;
@@ -19,6 +19,7 @@ customElements.define(
       this._currentFile = "";
       this._duplicates = null;
       this._stateInitialized = false;
+      this._scanStarted = false;
       
       // Initialize UI
       this.render();
@@ -45,24 +46,46 @@ customElements.define(
     }
 
     _updateScanState(hass) {
-      // Return if hass or scan state doesn't exist
-      if (!hass || !hass.states || !hass.states['duplicate_video_finder.scan_state']) {
+      // Return if hass doesn't exist
+      if (!hass) {
         return;
       }
 
-      // Get state and attributes
-      const entity = hass.states['duplicate_video_finder.scan_state'];
-      const attributes = entity.attributes || {};
+      // Try to get state from various possible entities
+      const scanState = 
+        hass.states['duplicate_video_finder.scan_state'] ||
+        hass.states['sensor.duplicate_video_finder_scan_state'];
       
-      // Update scan state properties
-      this._isScanning = entity.state === 'scanning';
-      this._isPaused = entity.state === 'paused';
-      this._progress = parseFloat(attributes.progress || 0);
-      this._currentFile = attributes.current_file || '';
+      // If we don't have a scan state entity yet but a scan has been started,
+      // keep the current scanning state
+      if (!scanState && this._scanStarted) {
+        return;
+      }
       
-      // Update duplicates if available
-      if (attributes.found_duplicates) {
-        this._duplicates = attributes.found_duplicates;
+      if (scanState) {
+        const attributes = scanState.attributes || {};
+        
+        // Update scan state properties
+        this._isScanning = scanState.state === 'scanning';
+        this._isPaused = scanState.state === 'paused';
+        this._progress = parseFloat(attributes.progress || 0);
+        this._currentFile = attributes.current_file || '';
+        
+        // Update duplicates if available
+        if (attributes.found_duplicates) {
+          this._duplicates = attributes.found_duplicates;
+        }
+      }
+      
+      // Check for duplicates in other potential entities
+      if (!this._duplicates) {
+        const dupsEntity = 
+          hass.states['sensor.duplicate_video_finder_duplicates'] ||
+          hass.states['duplicate_video_finder.duplicates'];
+        
+        if (dupsEntity && dupsEntity.attributes && dupsEntity.attributes.duplicates) {
+          this._duplicates = dupsEntity.attributes.duplicates;
+        }
       }
       
       // Clear polling if scan is complete
@@ -72,21 +95,41 @@ customElements.define(
     }
 
     _hasStateChanged(oldHass) {
-      // Check if hass exists
-      if (!oldHass || !oldHass.states || !oldHass.states['duplicate_video_finder.scan_state']) {
+      // Always return true when first initializing
+      if (!oldHass || !this._stateInitialized) {
         return true;
       }
 
-      // Get old state and attributes
-      const oldEntity = oldHass.states['duplicate_video_finder.scan_state'];
-      const oldAttributes = oldEntity.attributes || {};
+      // Check for state changes in possible entities
+      const oldScanState = 
+        oldHass.states['duplicate_video_finder.scan_state'] ||
+        oldHass.states['sensor.duplicate_video_finder_scan_state'];
+        
+      const newScanState = 
+        this._hass.states['duplicate_video_finder.scan_state'] ||
+        this._hass.states['sensor.duplicate_video_finder_scan_state'];
       
-      // Compare scan state properties
-      return this._isScanning !== (oldEntity.state === 'scanning') ||
-             this._isPaused !== (oldEntity.state === 'paused') ||
-             this._progress !== parseFloat(oldAttributes.progress || 0) ||
-             this._currentFile !== (oldAttributes.current_file || '') ||
-             JSON.stringify(this._duplicates) !== JSON.stringify(oldAttributes.found_duplicates || {});
+      // If entity appearance/disappearance has changed, render
+      if ((!oldScanState && newScanState) || (oldScanState && !newScanState)) {
+        return true;
+      }
+      
+      // If no states to compare, use local state
+      if (!oldScanState || !newScanState) {
+        return false;
+      }
+      
+      const oldAttributes = oldScanState.attributes || {};
+      const newAttributes = newScanState.attributes || {};
+      
+      // Compare relevant properties
+      return (
+        oldScanState.state !== newScanState.state ||
+        parseFloat(oldAttributes.progress || 0) !== parseFloat(newAttributes.progress || 0) ||
+        (oldAttributes.current_file || '') !== (newAttributes.current_file || '') ||
+        JSON.stringify(oldAttributes.found_duplicates || {}) !== 
+          JSON.stringify(newAttributes.found_duplicates || {})
+      );
     }
 
     connectedCallback() {
@@ -123,25 +166,41 @@ customElements.define(
       if (this._isScanning) {
         this._updateTimer = setInterval(() => {
           if (this._hass) {
-            // Directly get the latest state
-            this._hass.callApi('GET', 'states/duplicate_video_finder.scan_state')
-              .then(state => {
-                if (state) {
-                  // Create a temporary hass object with the scan state
-                  const tempHass = {
-                    states: {
-                      'duplicate_video_finder.scan_state': state
-                    }
-                  };
+            // Check for the scan state directly from the hass object
+            const scanState = 
+              this._hass.states['duplicate_video_finder.scan_state'] || 
+              this._hass.states['sensor.duplicate_video_finder_scan_state'];
+              
+            if (scanState) {
+              this._updateScanState(this._hass);
+              this.render();
+            } else {
+              // If we can't find the entity, try using the API
+              this._hass.callApi('GET', 'states')
+                .then(states => {
+                  // Find any entity related to duplicate video finder
+                  const scanStateEntity = states.find(state => 
+                    state.entity_id.includes('duplicate_video_finder') && 
+                    state.entity_id.includes('scan')
+                  );
                   
-                  // Update state and render
-                  this._updateScanState(tempHass);
-                  this.render();
-                }
-              })
-              .catch(error => {
-                console.error("Error polling scan state:", error);
-              });
+                  if (scanStateEntity) {
+                    // Create a temporary hass object with the scan state
+                    const tempHass = {
+                      states: {
+                        [scanStateEntity.entity_id]: scanStateEntity
+                      }
+                    };
+                    
+                    // Update state and render
+                    this._updateScanState(tempHass);
+                    this.render();
+                  }
+                })
+                .catch(error => {
+                  console.error("Error polling states:", error);
+                });
+            }
           }
         }, 1000);
       }
@@ -378,11 +437,12 @@ customElements.define(
     _renderScanningUI() {
       const statusText = this._isPaused ? 'Paused' : 'Scanning';
       const progressPercent = Math.min(100, Math.max(0, this._progress)).toFixed(1);
+      const currentFile = this._currentFile || 'Initializing...';
       
       return `
         <div class="scan-info">
           <div class="scan-status">${statusText} (${progressPercent}% complete)</div>
-          <div>Current file: ${this._currentFile || 'Initializing...'}</div>
+          <div>Current file: ${currentFile}</div>
         </div>
         
         <div class="progress-bar">
@@ -542,7 +602,8 @@ customElements.define(
       this._isScanning = true;
       this._isPaused = false;
       this._progress = 0;
-      this._currentFile = '';
+      this._currentFile = 'Starting scan...';
+      this._scanStarted = true;
       this.render();
       
       // Call the service
@@ -558,7 +619,27 @@ customElements.define(
       .catch(error => {
         // Reset UI on error
         this._isScanning = false;
+        this._scanStarted = false;
         console.error('Error starting scan:', error);
+        
+        // Show error message
+        const errorMsg = document.createElement('div');
+        errorMsg.style.color = 'red';
+        errorMsg.style.marginTop = '16px';
+        errorMsg.textContent = `Error starting scan: ${error.message || 'Unknown error'}`;
+        
+        // Add to UI
+        const content = this.shadowRoot.querySelector('.content');
+        if (content) {
+          content.appendChild(errorMsg);
+          // Remove after 5 seconds
+          setTimeout(() => {
+            if (content.contains(errorMsg)) {
+              content.removeChild(errorMsg);
+            }
+          }, 5000);
+        }
+        
         this.render();
       });
     }
