@@ -3,6 +3,9 @@ from typing import Final
 
 DOMAIN: Final = "duplicate_video_finder"
 
+# Entity IDs
+SCAN_STATE_ENTITY_ID: Final = "sensor.duplicate_video_finder_scan_state"
+
 # Service names
 SERVICE_FIND_DUPLICATES: Final = "find_duplicates"
 SERVICE_PAUSE_SCAN: Final = "pause_scan"

@@ -29,6 +29,7 @@ from .const import (
     DEFAULT_MAX_CPU_PERCENT,
     DEFAULT_BATCH_SIZE,
     SCAN_STATE_UPDATED,
+    SCAN_STATE_ENTITY_ID,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -103,25 +104,36 @@ def update_scan_state(hass: HomeAssistant, **kwargs) -> None:
     _LOGGER.debug("Scan state updated: %s", {k: v for k, v in scan_state.items() 
                                             if k != 'found_duplicates'})
     
-    # Notify listeners
-    async_dispatcher_send(hass, SCAN_STATE_UPDATED)
+    # Directly update the entity state if needed
+    entity_state = hass.states.get(SCAN_STATE_ENTITY_ID)
     
-    # If this entity ID is directly in hass data, make sure we're writing its state
-    if DOMAIN in hass.data and "entities" in hass.data[DOMAIN]:
-        for entity_id in hass.data[DOMAIN]["entities"]:
-            _LOGGER.debug("Notifying entity of state change: %s", entity_id)
-            state_obj = hass.states.get(entity_id)
-            if state_obj and state_obj.state == "unavailable":
-                _LOGGER.warning("Entity %s is unavailable, forcing state update", entity_id)
-                # Try to directly manipulate the state
-                hass.states.async_set(entity_id, 
-                    "scanning" if scan_state.get("is_scanning", False) else "idle",
-                    {
-                        "progress": 0,
-                        "current_file": scan_state.get("current_file", ""),
-                        "friendly_name": "Scan State"
-                    }
-                )
+    # Force a state update regardless of entity status
+    entity_state_name = "scanning"
+    if not scan_state.get("is_scanning", False):
+        entity_state_name = "idle"
+    elif scan_state.get("is_paused", False):
+        entity_state_name = "paused"
+        
+    # Calculate progress
+    processed = scan_state.get("processed_files", 0)
+    total = max(scan_state.get("total_files", 1), 1)
+    progress = round((processed / total) * 100, 1) if total > 0 else 0
+    
+    # Directly set the entity state
+    hass.states.async_set(
+        SCAN_STATE_ENTITY_ID,
+        entity_state_name,
+        {
+            "progress": progress,
+            "current_file": scan_state.get("current_file", ""),
+            "total_files": scan_state.get("total_files", 0),
+            "processed_files": scan_state.get("processed_files", 0),
+            "friendly_name": "Duplicate Video Finder Scan State",
+        }
+    )
+    
+    # Notify listeners for components using dispatcher
+    async_dispatcher_send(hass, SCAN_STATE_UPDATED)
 
 def calculate_file_hash(filepath: str, chunk_size: int = 8192) -> str:
     """Calculate SHA-256 hash of a file."""

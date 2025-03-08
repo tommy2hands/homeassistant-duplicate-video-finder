@@ -4,8 +4,6 @@ from __future__ import annotations
 import logging
 import os
 import shutil
-from typing import Any
-
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
@@ -13,12 +11,12 @@ from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.components.frontend import add_extra_js_url
-from homeassistant.components.http import HomeAssistantView
-from homeassistant.loader import bind_hass
 from homeassistant.const import Platform
+from homeassistant.helpers.entity_component import EntityComponent
 
-from .const import DOMAIN
+from .const import DOMAIN, SCAN_STATE_ENTITY_ID
 from .services import async_setup_services
+from .sensor import DuplicateVideoFinderSensor
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -42,6 +40,20 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN]["duplicates"] = {}
     hass.data[DOMAIN]["entities"] = []
+
+    # Initialize default scan state
+    hass.data[DOMAIN]["scan_state"] = {
+        "is_scanning": False,
+        "is_paused": False,
+        "cancel_requested": False,
+        "current_file": "",
+        "total_files": 0,
+        "processed_files": 0,
+        "start_time": None,
+        "pause_time": None,
+        "total_pause_time": 0,
+        "found_duplicates": {},
+    }
     
     # Create local directory for frontend files
     local_dir = hass.config.path("www", "duplicate_video_finder")
@@ -92,6 +104,25 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 DOMAIN, context={"source": "import"}, data={}
             )
         )
+    
+    # Manually register the sensor entity to ensure it's available
+    component = EntityComponent(_LOGGER, DOMAIN, hass)
+    sensor = DuplicateVideoFinderSensor(hass)
+    await component.async_add_entities([sensor])
+    _LOGGER.info("Created sensor entity: %s", sensor.entity_id)
+    
+    # Force state update for the scan state entity
+    hass.states.async_set(
+        SCAN_STATE_ENTITY_ID,
+        "idle",
+        {
+            "progress": 0,
+            "current_file": "",
+            "total_files": 0,
+            "processed_files": 0,
+            "friendly_name": "Scan State",
+        }
+    )
     
     return True
 

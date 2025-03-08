@@ -10,7 +10,7 @@ customElements.define(
       this._config = {};
       this._updateTimer = null;
       this._eventListenersAttached = false;
-      this._version = "1.1.8";
+      this._version = "1.1.9";
       
       // State properties with defaults
       this._isScanning = false;
@@ -60,10 +60,8 @@ customElements.define(
         return;
       }
 
-      // Try to get state from sensor entity 
-      const scanState = 
-        hass.states['sensor.duplicate_video_finder_scan_state'] ||
-        hass.states['sensor.duplicate_video_finder'];
+      // Get the entity
+      const scanState = hass.states['sensor.duplicate_video_finder_scan_state'];
       
       if (this._debugMode) {
         console.log("Checking scan state entity:", scanState);
@@ -71,42 +69,29 @@ customElements.define(
       
       if (scanState) {
         if (this._debugMode) {
-          console.log("Found scan state entity:", scanState.entity_id, scanState);
+          console.log("Found scan state entity:", scanState);
         }
         
         const attributes = scanState.attributes || {};
         
-        // Skip unavailable entities
-        if (scanState.state === 'unavailable') {
-          if (this._debugMode) {
-            console.log("Entity is unavailable, waiting for state initialization");
-          }
-          // Don't clear scanning state if we initiated a scan
-          if (this._scanStarted) {
-            return;
-          }
-        }
-        
-        // Update scan state properties based on the sensor state
+        // Handle different entity states
         this._isScanning = scanState.state === 'scanning';
         this._isPaused = scanState.state === 'paused';
         
-        // Get progress from attributes
+        // Get progress and other attributes
         if (attributes.progress !== undefined) {
           this._progress = parseFloat(attributes.progress || 0);
         }
         
-        // Get current file from attributes
         if (attributes.current_file) {
           this._currentFile = attributes.current_file;
         }
         
-        // Update duplicates if available
         if (attributes.found_duplicates) {
           this._duplicates = attributes.found_duplicates;
         }
         
-        // If we were scanning but now we're not, clear polling
+        // Reset scanning state if scan has completed
         if (this._scanStarted && !this._isScanning && scanState.state !== 'unavailable') {
           this._scanStarted = false;
           if (this._debugMode) {
@@ -114,23 +99,25 @@ customElements.define(
           }
           this._clearPolling();
         }
-      } else if (this._debugMode) {
-        console.log("No scan state entity found");
-      }
-      
-      // If we have a scan in progress but no entity yet, keep the UI in scanning state
-      if (this._scanStarted && (!scanState || scanState.state === 'unavailable')) {
-        // Calculate elapsed time
-        const elapsed = (Date.now() - this._startTime) / 1000;
+      } else {
+        if (this._debugMode) {
+          console.log("No scan state entity found");
+        }
         
-        if (elapsed > 30 && elapsed <= 120) {
-          this._currentFile = `Waiting for scan to start... (${Math.floor(elapsed)}s)`;
-        } else if (elapsed > 120) {
-          // Only after 2 minutes we consider it failed
-          this._isScanning = false;
-          this._scanStarted = false;
-          this._currentFile = "Scan failed to start properly. Please check Home Assistant logs.";
-          this._clearPolling();
+        // If we've started a scan but have no entity, keep UI state
+        if (this._scanStarted) {
+          const elapsed = (Date.now() - this._startTime) / 1000;
+          
+          if (elapsed > 30 && elapsed <= 120) {
+            // Show waiting message after 30 seconds
+            this._currentFile = `Waiting for scan to start... (${Math.floor(elapsed)}s)`;
+          } else if (elapsed > 120) {
+            // After 2 minutes, assume failure
+            this._isScanning = false;
+            this._scanStarted = false;
+            this._currentFile = "Scan failed to start properly. Please restart Home Assistant.";
+            this._clearPolling();
+          }
         }
       }
     }

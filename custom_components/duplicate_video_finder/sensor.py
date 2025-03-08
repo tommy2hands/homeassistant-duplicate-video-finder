@@ -5,15 +5,15 @@ import logging
 from typing import Any, Dict, Optional
 
 from homeassistant.const import STATE_IDLE
-from homeassistant.components.sensor import SensorEntity, SensorStateClass
+from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import StateType
-from homeassistant.helpers.restore_state import RestoreEntity
 
-from .const import DOMAIN, SCAN_STATE_UPDATED
+from .const import DOMAIN, SCAN_STATE_UPDATED, SCAN_STATE_ENTITY_ID
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -23,138 +23,112 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the Duplicate Video Finder sensor."""
-    _LOGGER.info("Setting up Duplicate Video Finder sensor entity")
+    _LOGGER.info("Setting up Duplicate Video Finder sensor")
     
-    # Initialize the scan state in hass.data if not already there
-    hass.data.setdefault(DOMAIN, {})
-    if "scan_state" not in hass.data[DOMAIN]:
-        hass.data[DOMAIN]["scan_state"] = {
-            "is_scanning": False,
-            "is_paused": False,
-            "cancel_requested": False,
-            "current_file": "",
-            "total_files": 0,
-            "processed_files": 0,
-            "start_time": None,
-            "pause_time": None,
-            "total_pause_time": 0,
-            "found_duplicates": {},
-        }
-    
-    # Create and add the sensor entity
-    scan_state_sensor = DuplicateVideoFinderSensor(hass)
-    async_add_entities([scan_state_sensor], True)
-    
-    # Store the entity in hass.data for services to use
-    hass.data[DOMAIN].setdefault("entities", [])
-    hass.data[DOMAIN]["entities"].append(scan_state_sensor.entity_id)
-    
-    _LOGGER.info("Duplicate Video Finder sensor setup complete")
+    # Only add sensor if it doesn't already exist
+    if hass.states.get(SCAN_STATE_ENTITY_ID) is None:
+        _LOGGER.info("Creating new sensor entity")
+        sensor = DuplicateVideoFinderSensor(hass)
+        async_add_entities([sensor], True)
+    else:
+        _LOGGER.info("Sensor entity already exists")
 
 
-class DuplicateVideoFinderSensor(RestoreEntity, SensorEntity):
+class DuplicateVideoFinderSensor(SensorEntity):
     """Sensor for tracking duplicate video scan state."""
-
-    _attr_has_entity_name = True
-    _attr_name = "Scan State"
-    _attr_icon = "mdi:file-video"
-    _attr_should_poll = False
-    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, hass: HomeAssistant) -> None:
         """Initialize the sensor."""
         self.hass = hass
-        self._attr_unique_id = f"{DOMAIN}_scan_state"
-        self.entity_id = f"sensor.{DOMAIN}_scan_state"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, "duplicate_video_finder")},
-            "name": "Duplicate Video Finder",
-            "manufacturer": "Home Assistant Community",
-            "model": "Integration",
-            "sw_version": "1.1.8",
-        }
-        
-        # Set initial state - important to not be "unavailable"
-        self._attr_native_value = STATE_IDLE
-        self._attr_extra_state_attributes = {
+        self.entity_id = SCAN_STATE_ENTITY_ID
+        self._name = "Duplicate Video Finder Scan State"
+        self._state = STATE_IDLE
+        self._attrs = {
             "progress": 0,
             "current_file": "",
             "total_files": 0,
             "processed_files": 0,
             "found_duplicates": {},
         }
-        
-        # Log initialization
-        _LOGGER.info(f"Duplicate Video Finder sensor initialized: {self.entity_id}")
+        _LOGGER.info("Initializing %s", self.entity_id)
 
     async def async_added_to_hass(self) -> None:
         """Register callbacks when entity is added."""
-        await super().async_added_to_hass()
-        
-        # Restore previous state if available
-        last_state = await self.async_get_last_state()
-        if last_state:
-            self._attr_native_value = last_state.state
-            
-            # Restore attributes if available
-            if last_state.attributes:
-                for key, value in last_state.attributes.items():
-                    if key in self._attr_extra_state_attributes:
-                        self._attr_extra_state_attributes[key] = value
-        
-        # Listen for scan state updates
+        # Listen for state updates
         self.async_on_remove(
             async_dispatcher_connect(
                 self.hass, SCAN_STATE_UPDATED, self._update_callback
             )
         )
         
-        # Initial update from current scan state and write to HA state
-        self._update_attributes()
-        self.async_write_ha_state()
+        # Read current scan state from hass.data
+        await self._update_from_data()
         
-        _LOGGER.info(f"Duplicate Video Finder sensor added to hass with state: {self._attr_native_value}")
+        # Immediately write state to make sure it's not unavailable
+        self.async_write_ha_state()
+        _LOGGER.info("Sensor %s added to hass with state %s", self.entity_id, self._state)
 
     @callback
     def _update_callback(self) -> None:
         """Update the entity when scan state changes."""
-        _LOGGER.debug("Scan state update received")
-        self._update_attributes()
-        self.async_write_ha_state()
+        _LOGGER.debug("Received scan state update")
+        self.hass.async_create_task(self._update_from_data())
 
-    @callback
-    def _update_attributes(self) -> None:
-        """Update the sensor state and attributes from scan_state."""
-        if DOMAIN not in self.hass.data or "scan_state" not in self.hass.data[DOMAIN]:
-            # Default to idle if no scan state is available
-            self._attr_native_value = STATE_IDLE
+    async def _update_from_data(self) -> None:
+        """Update state and attributes from hass.data."""
+        if DOMAIN not in self.hass.data:
+            _LOGGER.warning("Domain data not found, using defaults")
+            self._state = STATE_IDLE
             return
-        
-        # Get the current scan state
+            
         scan_state = self.hass.data[DOMAIN].get("scan_state", {})
-        _LOGGER.debug(f"Updating sensor with scan state: {scan_state}")
+        _LOGGER.debug("Updating from scan state: %s", scan_state)
         
-        # Determine the state value
+        # Determine state
         if scan_state.get("is_scanning", False):
             if scan_state.get("is_paused", False):
-                self._attr_native_value = "paused"
+                self._state = "paused"
             else:
-                self._attr_native_value = "scanning"
+                self._state = "scanning"
         else:
-            self._attr_native_value = STATE_IDLE
-        
+            self._state = STATE_IDLE
+            
         # Calculate progress
         processed = scan_state.get("processed_files", 0)
-        total = max(scan_state.get("total_files", 1), 1)  # Avoid division by zero
+        total = max(scan_state.get("total_files", 1), 1)
         progress = round((processed / total) * 100, 1) if total > 0 else 0
-        
-        # Set attributes
-        self._attr_extra_state_attributes = {
+            
+        # Update attributes
+        self._attrs = {
             "progress": progress,
             "current_file": scan_state.get("current_file", ""),
             "total_files": total,
             "processed_files": processed,
             "found_duplicates": scan_state.get("found_duplicates", {}),
+            "friendly_name": self._name,
         }
         
-        _LOGGER.debug(f"Sensor updated: state={self._attr_native_value}, progress={progress}") 
+        # Write state to Home Assistant
+        self.async_write_ha_state()
+        _LOGGER.debug("Updated sensor %s to state %s with progress %s", 
+                     self.entity_id, self._state, progress)
+    
+    @property
+    def name(self) -> str:
+        """Return the name of the entity."""
+        return self._name
+        
+    @property
+    def state(self) -> str:
+        """Return the state of the entity."""
+        return self._state
+        
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return the state attributes."""
+        return self._attrs
+        
+    @property
+    def icon(self) -> str:
+        """Return the icon of the sensor."""
+        return "mdi:file-video" 
