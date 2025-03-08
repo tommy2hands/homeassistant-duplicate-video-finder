@@ -675,8 +675,16 @@ customElements.define(
       
       // For debugging
       if (this._debugMode) {
-        console.log("Starting scan:", {
-          extensions
+        console.log("Starting scan with options:", {
+          extensions,
+          currentState: {
+            isScanning: this._isScanning,
+            isPaused: this._isPaused,
+            progress: this._progress,
+            currentFile: this._currentFile,
+            scanStarted: this._scanStarted,
+            startTime: this._startTime
+          }
         });
       }
       
@@ -691,7 +699,14 @@ customElements.define(
       .then(() => {
         // Service call successful
         if (this._debugMode) {
-          console.log("Service call successful");
+          console.log("Service call successful, current state:", {
+            isScanning: this._isScanning,
+            isPaused: this._isPaused,
+            progress: this._progress,
+            currentFile: this._currentFile,
+            scanStarted: this._scanStarted,
+            startTime: this._startTime
+          });
         }
       })
       .catch(error => {

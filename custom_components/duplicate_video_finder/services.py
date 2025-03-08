@@ -272,6 +272,8 @@ async def find_duplicate_videos(
     video_extensions: List[str] = DEFAULT_VIDEO_EXTENSIONS,
 ) -> Dict[str, List[str]]:
     """Find duplicate videos in home directories based on content."""
+    _LOGGER.debug("Starting find_duplicate_videos with extensions: %s", video_extensions)
+    
     # Make sure scan state is marked as scanning before we start
     update_scan_state(hass, 
         is_scanning=True,
@@ -291,6 +293,7 @@ async def find_duplicate_videos(
         # Find video files in home directories
         all_videos = []
         home_dirs = await hass.async_add_executor_job(get_home_directories)
+        _LOGGER.debug("Found home directories: %s", home_dirs)
         
         for home_dir in home_dirs:
             _LOGGER.info("Scanning directory: %s", home_dir)
@@ -307,6 +310,7 @@ async def find_duplicate_videos(
             videos = await hass.async_add_executor_job(
                 find_video_files, home_dir, video_extensions, hass
             )
+            _LOGGER.debug("Found %d videos in %s", len(videos), home_dir)
             
             all_videos.extend(videos)
             
@@ -319,11 +323,12 @@ async def find_duplicate_videos(
             
         # Check if scan was cancelled
         if scan_state["cancel_requested"]:
+            _LOGGER.info("Scan cancelled after finding files")
             update_scan_state(hass, is_scanning=False)
             return {}
             
         # Calculate file hashes and find duplicates
-        _LOGGER.info("Found %d video files, hashing files...", len(all_videos))
+        _LOGGER.info("Found %d video files, starting to hash files...", len(all_videos))
         
         # Update the scan state
         update_scan_state(hass, 
@@ -333,13 +338,16 @@ async def find_duplicate_videos(
         
         # Make sure we're still in scanning state before proceeding
         if not scan_state["is_scanning"]:
+            _LOGGER.debug("Resetting scanning state to True")
             update_scan_state(hass, is_scanning=True)
         
         # Process files
         duplicates = {}
         
         # Hash all files in parallel
+        _LOGGER.debug("Starting parallel file hashing")
         file_hashes = await hash_files_parallel(hass, all_videos)
+        _LOGGER.debug("Completed hashing %d files", len(file_hashes))
         
         # Group files by hash to find duplicates
         for filepath, file_hash in file_hashes.items():
@@ -359,10 +367,13 @@ async def find_duplicate_videos(
         # Filter to only include actual duplicates (more than 1 file with same hash)
         result_duplicates = {k: v for k, v in duplicates.items() if len(v) > 1}
         
+        _LOGGER.debug("Found %d groups of duplicates", len(result_duplicates))
+        
         # Final update
         scan_state["found_duplicates"] = result_duplicates
         update_scan_state(
             hass,
+            is_scanning=False,  # Explicitly set to false when complete
             current_file="Scan complete!",
             found_duplicates=result_duplicates
         )
@@ -372,9 +383,10 @@ async def find_duplicate_videos(
         return result_duplicates
         
     except Exception as err:
-        _LOGGER.error("Error during scan: %s", err)
+        _LOGGER.error("Error during scan: %s", err, exc_info=True)  # Added exc_info for full traceback
         update_scan_state(
             hass,
+            is_scanning=False,  # Explicitly set to false on error
             current_file=f"Error: {str(err)}"
         )
         raise
