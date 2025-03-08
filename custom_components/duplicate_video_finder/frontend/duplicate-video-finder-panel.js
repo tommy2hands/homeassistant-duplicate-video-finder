@@ -10,7 +10,7 @@ customElements.define(
       this._config = {};
       this._updateTimer = null;
       this._eventListenersAttached = false;
-      this._version = "1.1.10";
+      this._version = "1.1.11";
       
       // State properties with defaults
       this._isScanning = false;

@@ -516,6 +516,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         scan_state["start_time"] = time.time()
         scan_state["pause_time"] = None
         scan_state["total_pause_time"] = 0
+        scan_state["found_duplicates"] = {}
         
         # Update state immediately - this ensures the entity reflects our scanning state
         update_scan_state(hass)
@@ -525,24 +526,33 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         # Run the scan in a background task
         async def run_scan():
             try:
+                # Store the task reference to prevent premature garbage collection
+                hass.data[DOMAIN]["scan_task"] = asyncio.current_task()
+                
                 # This needs to be in a try/except to ensure scanning state is reset on error
-                await find_duplicate_videos(hass, video_exts, max_cpu_percent, batch_size)
+                duplicates = await find_duplicate_videos(hass, video_exts, max_cpu_percent, batch_size)
+                
+                # Update found duplicates
+                scan_state["found_duplicates"] = duplicates
+                
             except Exception as err:
                 _LOGGER.error("Error during scan: %s", err)
                 # Reset scan state on error
                 scan_state["is_scanning"] = False
                 scan_state["current_file"] = f"Error: {str(err)}"
-                update_scan_state(hass, 
-                    is_scanning=False,
-                    current_file=f"Error: {str(err)}"
-                )
+                update_scan_state(hass)
             finally:
-                # Ensure the UI is updated when the scan completes or fails
-                if scan_state["is_scanning"]:
+                # Only reset scanning state if we're the current scan task
+                current_task = hass.data[DOMAIN].get("scan_task")
+                if current_task == asyncio.current_task():
                     scan_state["is_scanning"] = False
-                    update_scan_state(hass, is_scanning=False)
+                    if not scan_state.get("cancel_requested"):
+                        scan_state["current_file"] = "Scan complete!"
+                    update_scan_state(hass)
+                    # Clear the task reference
+                    hass.data[DOMAIN]["scan_task"] = None
         
-        # Start the scan in the background
+        # Start the scan in the background and store the task
         hass.async_create_task(run_scan())
     
     async def handle_pause_scan(call: ServiceCall) -> None:
