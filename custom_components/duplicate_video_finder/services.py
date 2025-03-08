@@ -306,20 +306,13 @@ async def find_duplicate_videos(
     This function scans for video files with the specified extensions,
     calculates their hashes, and returns groups of duplicate files.
     """
-    # Reset scan state
-    scan_state["is_scanning"] = True
-    scan_state["is_paused"] = False
-    scan_state["cancel_requested"] = False
-    scan_state["current_file"] = "Starting scan..."
-    scan_state["start_time"] = time.time()
-    scan_state["pause_time"] = None
-    scan_state["total_pause_time"] = 0
-    scan_state["total_files"] = 0
-    scan_state["processed_files"] = 0
-    scan_state["found_duplicates"] = {}
-    
-    # Initial update
-    update_scan_state(hass)
+    # Make sure scan state is marked as scanning before we start
+    update_scan_state(hass, 
+        is_scanning=True,
+        current_file="Starting scan...",
+        processed_files=0,
+        total_files=0
+    )
     
     # Ensure pause event is ready
     if scan_state["pause_event"] is None:
@@ -351,13 +344,15 @@ async def find_duplicate_videos(
             
             all_videos.extend(videos)
             
-            # Update total file count
+            # Update total file count - directly update hass state
             scan_state["total_files"] = len(all_videos)
-            update_scan_state(hass, total_files=len(all_videos))
+            update_scan_state(hass, 
+                total_files=len(all_videos),
+                current_file=f"Found {len(all_videos)} video files so far..."
+            )
             
         # Check if scan was cancelled
         if scan_state["cancel_requested"]:
-            scan_state["is_scanning"] = False
             update_scan_state(hass, is_scanning=False)
             return {}
             
@@ -365,14 +360,17 @@ async def find_duplicate_videos(
         _LOGGER.info("Found %d video files, hashing files...", len(all_videos))
         
         # Update the scan state
-        scan_state["total_files"] = len(all_videos)
-        update_scan_state(hass, total_files=len(all_videos))
+        update_scan_state(hass, 
+            total_files=len(all_videos),
+            current_file=f"Starting to hash {len(all_videos)} files..."
+        )
         
-        # Hash the files in parallel with CPU limitation
-        file_hashes = {}
-        duplicates = {}
+        # Make sure we're still in scanning state before proceeding
+        if not scan_state["is_scanning"]:
+            update_scan_state(hass, is_scanning=True)
         
         # Process files in batches
+        duplicates = {}
         total_batches = (len(all_videos) + batch_size - 1) // batch_size
         
         for batch_idx in range(total_batches):
@@ -393,8 +391,6 @@ async def find_duplicate_videos(
             _LOGGER.debug("Processing batch %d/%d (%d files)", 
                          batch_idx + 1, total_batches, len(current_batch))
             
-            batch_start_time = time.time()
-            
             # Process each file in the batch
             for i, file_path in enumerate(current_batch):
                 # Check if scan was cancelled
@@ -410,22 +406,23 @@ async def find_duplicate_videos(
                         break
                     await asyncio.sleep(0.5)
                 
-                # Update current file
+                # Update current file and progress
+                current_processed = start_idx + i
                 scan_state["current_file"] = file_path
-                scan_state["processed_files"] = start_idx + i
+                scan_state["processed_files"] = current_processed
                 
                 # Update at regular intervals to avoid too many updates
                 if i % 5 == 0 or i == len(current_batch) - 1:
                     update_scan_state(
                         hass, 
                         current_file=file_path,
-                        processed_files=start_idx + i
+                        processed_files=current_processed,
+                        is_scanning=True  # Ensure we maintain scanning state
                     )
                 
-                # Calculate hash
+                # Calculate hash and process file
                 try:
                     file_hash = await hass.async_add_executor_job(calculate_file_hash, file_path)
-                    file_hashes[file_path] = file_hash
                     
                     # Check for duplicates
                     if file_hash in duplicates:
@@ -443,13 +440,12 @@ async def find_duplicate_videos(
                 except Exception as err:
                     _LOGGER.error("Error hashing file %s: %s", file_path, err)
             
-            # Update processed files after batch
+            # Update processed files count after batch
             scan_state["processed_files"] = end_idx
-            update_scan_state(hass, processed_files=end_idx)
-            
-            batch_duration = time.time() - batch_start_time
-            _LOGGER.debug("Batch %d/%d completed in %.2f seconds", 
-                         batch_idx + 1, total_batches, batch_duration)
+            update_scan_state(hass, 
+                processed_files=end_idx,
+                is_scanning=True  # Ensure we maintain scanning state
+            )
             
             # Update found duplicates every batch
             filtered_duplicates = {k: v for k, v in duplicates.items() if len(v) > 1}
@@ -459,14 +455,11 @@ async def find_duplicate_videos(
         # Filter to only include actual duplicates (more than 1 file with same hash)
         result_duplicates = {k: v for k, v in duplicates.items() if len(v) > 1}
         
-        # Final update
-        scan_state["is_scanning"] = False
-        scan_state["current_file"] = ""
+        # Final update - don't change scanning state yet, let the caller do that
         scan_state["found_duplicates"] = result_duplicates
         update_scan_state(
             hass,
-            is_scanning=False,
-            current_file="",
+            current_file="Scan complete!",
             found_duplicates=result_duplicates
         )
         
@@ -477,16 +470,14 @@ async def find_duplicate_videos(
     except Exception as err:
         _LOGGER.error("Error during scan: %s", err)
         
-        # Reset scan state on error
-        scan_state["is_scanning"] = False
-        scan_state["current_file"] = f"Error: {str(err)}"
+        # Update state to show error
         update_scan_state(
             hass,
-            is_scanning=False,
             current_file=f"Error: {str(err)}"
         )
         
-        return {}
+        # Re-raise to caller can handle it
+        raise
 
 async def async_setup_services(hass: HomeAssistant) -> None:
     """Set up the services for the Duplicate Video Finder integration."""
@@ -510,6 +501,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
             _LOGGER.warning("A scan is already in progress. Cancel it first or wait for it to complete.")
             return
             
+        # Get scan parameters
         video_exts = call.data.get(CONF_VIDEO_EXTENSIONS, DEFAULT_VIDEO_EXTENSIONS)
         max_cpu_percent = call.data.get(CONF_MAX_CPU_PERCENT, DEFAULT_MAX_CPU_PERCENT)
         batch_size = call.data.get(CONF_BATCH_SIZE, DEFAULT_BATCH_SIZE)
@@ -525,15 +517,33 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         scan_state["pause_time"] = None
         scan_state["total_pause_time"] = 0
         
-        # Update state immediately
+        # Update state immediately - this ensures the entity reflects our scanning state
         update_scan_state(hass)
         
         _LOGGER.info("Starting duplicate video scan in /home directories")
         
-        # Run the scan in a background task to avoid blocking
-        hass.async_create_task(
-            find_duplicate_videos(hass, video_exts, max_cpu_percent, batch_size)
-        )
+        # Run the scan in a background task
+        async def run_scan():
+            try:
+                # This needs to be in a try/except to ensure scanning state is reset on error
+                await find_duplicate_videos(hass, video_exts, max_cpu_percent, batch_size)
+            except Exception as err:
+                _LOGGER.error("Error during scan: %s", err)
+                # Reset scan state on error
+                scan_state["is_scanning"] = False
+                scan_state["current_file"] = f"Error: {str(err)}"
+                update_scan_state(hass, 
+                    is_scanning=False,
+                    current_file=f"Error: {str(err)}"
+                )
+            finally:
+                # Ensure the UI is updated when the scan completes or fails
+                if scan_state["is_scanning"]:
+                    scan_state["is_scanning"] = False
+                    update_scan_state(hass, is_scanning=False)
+        
+        # Start the scan in the background
+        hass.async_create_task(run_scan())
     
     async def handle_pause_scan(call: ServiceCall) -> None:
         """Handle the pause_scan service call."""

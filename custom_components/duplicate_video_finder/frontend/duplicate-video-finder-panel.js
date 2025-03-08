@@ -10,7 +10,7 @@ customElements.define(
       this._config = {};
       this._updateTimer = null;
       this._eventListenersAttached = false;
-      this._version = "1.1.9";
+      this._version = "1.1.10";
       
       // State properties with defaults
       this._isScanning = false;
@@ -42,7 +42,7 @@ customElements.define(
       // Handle scan state updates
       this._updateScanState(hass);
       
-      // Render if state has changed or not initialized yet
+      // Only re-render if something has changed
       if (!this._stateInitialized || (oldHass && this._hasStateChanged(oldHass))) {
         this.render();
         this._stateInitialized = true;
@@ -67,6 +67,7 @@ customElements.define(
         console.log("Checking scan state entity:", scanState);
       }
       
+      // If we have a valid entity
       if (scanState) {
         if (this._debugMode) {
           console.log("Found scan state entity:", scanState);
@@ -75,29 +76,34 @@ customElements.define(
         const attributes = scanState.attributes || {};
         
         // Handle different entity states
-        this._isScanning = scanState.state === 'scanning';
-        this._isPaused = scanState.state === 'paused';
+        const newIsScanning = scanState.state === 'scanning';
+        const newIsPaused = scanState.state === 'paused';
         
         // Get progress and other attributes
-        if (attributes.progress !== undefined) {
-          this._progress = parseFloat(attributes.progress || 0);
-        }
+        const newProgress = attributes.progress !== undefined 
+          ? parseFloat(attributes.progress || 0) 
+          : this._progress;
+          
+        const newCurrentFile = attributes.current_file || this._currentFile;
         
-        if (attributes.current_file) {
-          this._currentFile = attributes.current_file;
-        }
-        
-        if (attributes.found_duplicates) {
-          this._duplicates = attributes.found_duplicates;
-        }
-        
-        // Reset scanning state if scan has completed
-        if (this._scanStarted && !this._isScanning && scanState.state !== 'unavailable') {
-          this._scanStarted = false;
+        // Only consider scan complete if we initiated a scan AND it transitions from scanning to idle
+        if (this._scanStarted && this._isScanning && !newIsScanning) {
           if (this._debugMode) {
             console.log("Scan completed, clearing polling");
           }
+          this._scanStarted = false;
           this._clearPolling();
+        }
+        
+        // Update all state properties at once to avoid partial updates
+        this._isScanning = newIsScanning;
+        this._isPaused = newIsPaused;
+        this._progress = newProgress;
+        this._currentFile = newCurrentFile;
+        
+        // Update duplicates if available
+        if (attributes.found_duplicates) {
+          this._duplicates = attributes.found_duplicates;
         }
       } else {
         if (this._debugMode) {
