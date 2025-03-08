@@ -10,7 +10,7 @@ customElements.define(
       this._config = {};
       this._updateTimer = null;
       this._eventListenersAttached = false;
-      this._version = "1.1.11";
+      this._version = "1.1.13";
       
       // State properties with defaults
       this._isScanning = false;
@@ -530,25 +530,16 @@ customElements.define(
           <input type="text" id="extensions" class="form-control" placeholder="mp4, mkv, avi, mov" value="mp4, mkv, avi, mov">
         </div>
         
-        <div class="accordion">
-          <div class="accordion-header" id="advanced-header">
-            Advanced Options <span>▼</span>
-          </div>
-          <div class="accordion-content" id="advanced-content">
-            <div class="form-group">
-              <label for="max-cpu">Max CPU Usage (%)</label>
-              <input type="number" id="max-cpu" class="form-control" min="10" max="100" value="70">
-            </div>
-            <div class="form-group">
-              <label for="batch-size">Batch Size</label>
-              <input type="number" id="batch-size" class="form-control" min="10" max="1000" value="100">
-            </div>
-          </div>
+        <div class="flex-row">
+          <button id="start-scan" class="primary">
+            <span class="button-icon">▶</span> Start Scan
+          </button>
+          ${this._debugMode ? `
+            <button id="create-test-files" class="secondary">
+              <span class="button-icon">🔧</span> Create Test Files
+            </button>
+          ` : ''}
         </div>
-        
-        <button id="start-scan" class="primary">
-          <span class="button-icon">▶</span> Start Scan
-        </button>
       `;
     }
 
@@ -614,6 +605,12 @@ customElements.define(
         startButton.addEventListener('click', () => this._startScan());
       }
       
+      // Create test files button (debug mode only)
+      const createTestButton = this.shadowRoot.querySelector('#create-test-files');
+      if (createTestButton) {
+        createTestButton.addEventListener('click', () => this._createTestFiles());
+      }
+      
       // Pause scan button
       const pauseButton = this.shadowRoot.querySelector('#pause-scan');
       if (pauseButton) {
@@ -632,12 +629,6 @@ customElements.define(
         cancelButton.addEventListener('click', () => this._cancelScan());
       }
       
-      // Advanced accordion toggle
-      const advancedHeader = this.shadowRoot.querySelector('#advanced-header');
-      if (advancedHeader) {
-        advancedHeader.addEventListener('click', () => this._toggleAdvanced());
-      }
-      
       // Duplicate group toggles
       const groupHeaders = this.shadowRoot.querySelectorAll('.duplicate-group-header');
       groupHeaders.forEach(header => {
@@ -645,21 +636,6 @@ customElements.define(
       });
       
       this._eventListenersAttached = true;
-    }
-
-    _toggleAdvanced() {
-      const content = this.shadowRoot.querySelector('#advanced-content');
-      if (content) {
-        content.classList.toggle('open');
-        
-        const header = this.shadowRoot.querySelector('#advanced-header');
-        if (header) {
-          const arrow = header.querySelector('span');
-          if (arrow) {
-            arrow.textContent = content.classList.contains('open') ? '▲' : '▼';
-          }
-        }
-      }
     }
 
     _toggleGroup(e) {
@@ -683,13 +659,9 @@ customElements.define(
       
       // Get scan options
       const extensionsInput = this.shadowRoot.querySelector('#extensions');
-      const maxCpuInput = this.shadowRoot.querySelector('#max-cpu');
-      const batchSizeInput = this.shadowRoot.querySelector('#batch-size');
       
       // Parse values with defaults
       const extensions = extensionsInput?.value.split(',').map(ext => ext.trim()).filter(Boolean) || ['mp4', 'mkv', 'avi', 'mov'];
-      const maxCpu = parseInt(maxCpuInput?.value) || 70;
-      const batchSize = parseInt(batchSizeInput?.value) || 100;
       
       // Update UI state immediately
       this._isScanning = true;
@@ -704,9 +676,7 @@ customElements.define(
       // For debugging
       if (this._debugMode) {
         console.log("Starting scan:", {
-          extensions,
-          maxCpu,
-          batchSize
+          extensions
         });
       }
       
@@ -716,9 +686,7 @@ customElements.define(
       // Call the service
       this._lastServiceCall = Date.now();
       this._hass.callService('duplicate_video_finder', 'find_duplicates', {
-        video_extensions: extensions,
-        max_cpu_percent: maxCpu,
-        batch_size: batchSize
+        video_extensions: extensions
       })
       .then(() => {
         // Service call successful
@@ -795,6 +763,40 @@ customElements.define(
       this._hass.callService('duplicate_video_finder', 'cancel_scan', {})
         .catch(error => {
           console.error('Error cancelling scan:', error);
+        });
+    }
+
+    // Add new method for creating test files
+    _createTestFiles() {
+      if (!this._debugMode) return;
+      
+      // Call the service
+      this._hass.callService('duplicate_video_finder', 'create_test_files', {})
+        .then(() => {
+          if (this._debugMode) {
+            console.log("Test files created successfully");
+          }
+        })
+        .catch(error => {
+          console.error('Error creating test files:', error);
+          
+          // Show error message
+          const errorMsg = document.createElement('div');
+          errorMsg.style.color = 'red';
+          errorMsg.style.marginTop = '16px';
+          errorMsg.textContent = `Error creating test files: ${error.message || 'Unknown error'}`;
+          
+          // Add to UI
+          const content = this.shadowRoot.querySelector('.content');
+          if (content) {
+            content.appendChild(errorMsg);
+            // Remove after 5 seconds
+            setTimeout(() => {
+              if (content.contains(errorMsg)) {
+                content.removeChild(errorMsg);
+              }
+            }, 5000);
+          }
         });
     }
   }

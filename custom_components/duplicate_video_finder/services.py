@@ -7,10 +7,11 @@ import logging
 import os
 import time
 import glob
-import psutil
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Set, Tuple, Optional
+from pathlib import Path
+import shutil
 
 from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.helpers.typing import ConfigType
@@ -104,9 +105,6 @@ def update_scan_state(hass: HomeAssistant, **kwargs) -> None:
     _LOGGER.debug("Scan state updated: %s", {k: v for k, v in scan_state.items() 
                                             if k != 'found_duplicates'})
     
-    # Directly update the entity state if needed
-    entity_state = hass.states.get(SCAN_STATE_ENTITY_ID)
-    
     # Force a state update regardless of entity status
     entity_state_name = "scanning"
     if not scan_state.get("is_scanning", False):
@@ -160,12 +158,6 @@ def calculate_file_hash(filepath: str, chunk_size: int = 8192) -> str:
                     if scan_state["pause_time"]:
                         scan_state["total_pause_time"] += time.time() - scan_state["pause_time"]
                         scan_state["pause_time"] = None
-                
-                # Check CPU usage and throttle if needed
-                cpu_percent = psutil.cpu_percent(interval=0.1)
-                if cpu_percent > scan_state.get("max_cpu_percent", DEFAULT_MAX_CPU_PERCENT):
-                    # Sleep to reduce CPU usage
-                    time.sleep(0.5)
                 
                 sha256_hash.update(chunk)
                 processed_size += len(chunk)
@@ -248,64 +240,38 @@ def find_video_files(directory: str, video_extensions: List[str], hass: Optional
     
     return video_files
 
-async def hash_files_parallel(hass: HomeAssistant, files: List[str], batch_size: int = DEFAULT_BATCH_SIZE) -> Dict[str, str]:
+async def hash_files_parallel(hass: HomeAssistant, files: List[str]) -> Dict[str, str]:
     """Hash multiple files in parallel using a thread pool."""
     file_hashes = {}
     
-    # Process files in batches to manage memory usage
-    for i in range(0, len(files), batch_size):
-        # Check if cancel was requested
-        if scan_state["cancel_requested"]:
-            return file_hashes
-            
-        # Process a batch of files
-        batch = files[i:i+batch_size]
-        _LOGGER.info("Processing batch %d/%d (%d files)", i//batch_size + 1, (len(files) + batch_size - 1)//batch_size, len(batch))
+    # Use a thread pool to hash files in parallel
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        # Create a list of future objects
+        future_to_file = {
+            executor.submit(calculate_file_hash, filepath): filepath
+            for filepath in files
+        }
         
-        # Update scan state
-        update_scan_state(hass, current_file=f"Processing batch {i//batch_size + 1}/{(len(files) + batch_size - 1)//batch_size}")
-        
-        # Use a thread pool to hash files in parallel
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            # Create a list of future objects
-            future_to_file = {
-                executor.submit(calculate_file_hash, filepath): filepath
-                for filepath in batch
-            }
-            
-            # Process results as they complete
-            for future in asyncio.as_completed([future for future in future_to_file]):
-                filepath = future_to_file[future]
-                try:
-                    file_hash = future.result()
-                    if file_hash:  # Only add if hash was successful
-                        file_hashes[filepath] = file_hash
-                        
-                        # Update scan state
-                        update_scan_state(hass, current_file=filepath)
-                except Exception as exc:
-                    _LOGGER.error("Error processing file %s: %s", filepath, exc)
-        
-        # Check memory usage and run garbage collection if needed
-        memory_percent = psutil.virtual_memory().percent
-        if memory_percent > 80:  # If memory usage is above 80%
-            import gc
-            gc.collect()  # Run garbage collection
-            await asyncio.sleep(1)  # Give system time to reclaim memory
+        # Process results as they complete
+        for future in asyncio.as_completed([future for future in future_to_file]):
+            filepath = future_to_file[future]
+            try:
+                file_hash = future.result()
+                if file_hash:  # Only add if hash was successful
+                    file_hashes[filepath] = file_hash
+                    
+                    # Update scan state
+                    update_scan_state(hass, current_file=filepath)
+            except Exception as exc:
+                _LOGGER.error("Error processing file %s: %s", filepath, exc)
     
     return file_hashes
 
 async def find_duplicate_videos(
     hass: HomeAssistant,
     video_extensions: List[str] = DEFAULT_VIDEO_EXTENSIONS,
-    max_cpu_percent: int = DEFAULT_MAX_CPU_PERCENT,
-    batch_size: int = DEFAULT_BATCH_SIZE,
 ) -> Dict[str, List[str]]:
-    """Find duplicate videos in home directories based on content.
-    
-    This function scans for video files with the specified extensions,
-    calculates their hashes, and returns groups of duplicate files.
-    """
+    """Find duplicate videos in home directories based on content."""
     # Make sure scan state is marked as scanning before we start
     update_scan_state(hass, 
         is_scanning=True,
@@ -344,7 +310,7 @@ async def find_duplicate_videos(
             
             all_videos.extend(videos)
             
-            # Update total file count - directly update hass state
+            # Update total file count
             scan_state["total_files"] = len(all_videos)
             update_scan_state(hass, 
                 total_files=len(all_videos),
@@ -369,93 +335,31 @@ async def find_duplicate_videos(
         if not scan_state["is_scanning"]:
             update_scan_state(hass, is_scanning=True)
         
-        # Process files in batches
+        # Process files
         duplicates = {}
-        total_batches = (len(all_videos) + batch_size - 1) // batch_size
         
-        for batch_idx in range(total_batches):
-            # Check if scan was cancelled
-            if scan_state["cancel_requested"]:
-                _LOGGER.info("Scan cancelled during processing")
-                break
-                
-            # Wait if paused
-            await scan_state["pause_event"].wait()
-            
-            # Get the current batch
-            start_idx = batch_idx * batch_size
-            end_idx = min(start_idx + batch_size, len(all_videos))
-            current_batch = all_videos[start_idx:end_idx]
-            
-            # Hash the batch of files
-            _LOGGER.debug("Processing batch %d/%d (%d files)", 
-                         batch_idx + 1, total_batches, len(current_batch))
-            
-            # Process each file in the batch
-            for i, file_path in enumerate(current_batch):
-                # Check if scan was cancelled
-                if scan_state["cancel_requested"]:
-                    break
-                    
-                # Wait if paused
-                await scan_state["pause_event"].wait()
-                
-                # Limit CPU usage
-                while psutil.cpu_percent(interval=0.1) > max_cpu_percent:
-                    if scan_state["cancel_requested"]:
-                        break
-                    await asyncio.sleep(0.5)
-                
-                # Update current file and progress
-                current_processed = start_idx + i
-                scan_state["current_file"] = file_path
-                scan_state["processed_files"] = current_processed
-                
-                # Update at regular intervals to avoid too many updates
-                if i % 5 == 0 or i == len(current_batch) - 1:
-                    update_scan_state(
-                        hass, 
-                        current_file=file_path,
-                        processed_files=current_processed,
-                        is_scanning=True  # Ensure we maintain scanning state
-                    )
-                
-                # Calculate hash and process file
-                try:
-                    file_hash = await hass.async_add_executor_job(calculate_file_hash, file_path)
-                    
-                    # Check for duplicates
-                    if file_hash in duplicates:
-                        duplicates[file_hash].append({
-                            "path": file_path,
-                            "size": os.path.getsize(file_path),
-                            "created": os.path.getctime(file_path)
-                        })
-                    else:
-                        duplicates[file_hash] = [{
-                            "path": file_path,
-                            "size": os.path.getsize(file_path),
-                            "created": os.path.getctime(file_path)
-                        }]
-                except Exception as err:
-                    _LOGGER.error("Error hashing file %s: %s", file_path, err)
-            
-            # Update processed files count after batch
-            scan_state["processed_files"] = end_idx
-            update_scan_state(hass, 
-                processed_files=end_idx,
-                is_scanning=True  # Ensure we maintain scanning state
-            )
-            
-            # Update found duplicates every batch
-            filtered_duplicates = {k: v for k, v in duplicates.items() if len(v) > 1}
-            scan_state["found_duplicates"] = filtered_duplicates
-            update_scan_state(hass, found_duplicates=filtered_duplicates)
+        # Hash all files in parallel
+        file_hashes = await hash_files_parallel(hass, all_videos)
+        
+        # Group files by hash to find duplicates
+        for filepath, file_hash in file_hashes.items():
+            if file_hash in duplicates:
+                duplicates[file_hash].append({
+                    "path": filepath,
+                    "size": os.path.getsize(filepath),
+                    "created": os.path.getctime(filepath)
+                })
+            else:
+                duplicates[file_hash] = [{
+                    "path": filepath,
+                    "size": os.path.getsize(filepath),
+                    "created": os.path.getctime(filepath)
+                }]
         
         # Filter to only include actual duplicates (more than 1 file with same hash)
         result_duplicates = {k: v for k, v in duplicates.items() if len(v) > 1}
         
-        # Final update - don't change scanning state yet, let the caller do that
+        # Final update
         scan_state["found_duplicates"] = result_duplicates
         update_scan_state(
             hass,
@@ -469,14 +373,10 @@ async def find_duplicate_videos(
         
     except Exception as err:
         _LOGGER.error("Error during scan: %s", err)
-        
-        # Update state to show error
         update_scan_state(
             hass,
             current_file=f"Error: {str(err)}"
         )
-        
-        # Re-raise to caller can handle it
         raise
 
 async def async_setup_services(hass: HomeAssistant) -> None:
@@ -530,7 +430,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
                 hass.data[DOMAIN]["scan_task"] = asyncio.current_task()
                 
                 # This needs to be in a try/except to ensure scanning state is reset on error
-                duplicates = await find_duplicate_videos(hass, video_exts, max_cpu_percent, batch_size)
+                duplicates = await find_duplicate_videos(hass, video_exts)
                 
                 # Update found duplicates
                 scan_state["found_duplicates"] = duplicates
@@ -614,6 +514,49 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         # Update scan state
         update_scan_state(hass, cancel_requested=True)
     
+    async def handle_create_test_files(call: ServiceCall) -> None:
+        """Handle the create_test_files service call."""
+        try:
+            # Create test directory in config directory
+            config_dir = hass.config.config_dir
+            test_dir = os.path.join(config_dir, "duplicate_video_finder_test")
+            os.makedirs(test_dir, exist_ok=True)
+
+            # Create a small test video file
+            test_content = b"This is a test video file content"
+            original_path = os.path.join(test_dir, "original_test.mp4")
+            duplicate_path = os.path.join(test_dir, "duplicate_test.mp4")
+
+            # Write the original file
+            with open(original_path, "wb") as f:
+                f.write(test_content)
+
+            # Create the duplicate by copying
+            shutil.copy2(original_path, duplicate_path)
+
+            _LOGGER.info("Created test files at: %s", test_dir)
+
+            # Update the scan state to show the test files
+            scan_state["found_duplicates"] = {
+                hashlib.sha256(test_content).hexdigest(): [
+                    {
+                        "path": original_path,
+                        "size": len(test_content),
+                        "created": os.path.getctime(original_path)
+                    },
+                    {
+                        "path": duplicate_path,
+                        "size": len(test_content),
+                        "created": os.path.getctime(duplicate_path)
+                    }
+                ]
+            }
+            update_scan_state(hass)
+
+        except Exception as err:
+            _LOGGER.error("Error creating test files: %s", err)
+            raise
+
     # Register all services
     hass.services.async_register(
         DOMAIN, SERVICE_FIND_DUPLICATES, handle_find_duplicates
@@ -629,6 +572,10 @@ async def async_setup_services(hass: HomeAssistant) -> None:
     
     hass.services.async_register(
         DOMAIN, SERVICE_CANCEL_SCAN, handle_cancel_scan
+    )
+
+    hass.services.async_register(
+        DOMAIN, "create_test_files", handle_create_test_files
     )
     
     # Log all the registered services for debugging
